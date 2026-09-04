@@ -60,6 +60,11 @@ def random_ua_string():
 # Đường dẫn mặc định của Extension Shopee Cookie
 import hashlib
 EXTENSION_PATH = r'E:\reup SP mơi\Cookie Shopee 26.08.2026'
+if not os.path.exists(EXTENSION_PATH):
+    for _candidate in [r'E:\reup SP moi\Cookie Shopee 26.08.2026', r'E:\Extension shopee af']:
+        if os.path.exists(_candidate):
+            EXTENSION_PATH = _candidate
+            break
 
 def get_chromium_extension_id(path_str):
     """Tính toán Extension ID chuẩn Chromium cho unpacked extension từ đường dẫn"""

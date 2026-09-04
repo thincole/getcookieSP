@@ -309,6 +309,34 @@ class GemloginCookieGUI:
         )
         self.export_format_combo.pack(fill=tk.X, pady=(2, 10))
         
+        # Extension Path Configuration
+        tk.Label(self.left_panel, text="Đường dẫn Extension Cookie:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
+        ext_frame = tk.Frame(self.left_panel, bg=BG_CARD)
+        ext_frame.pack(fill=tk.X, pady=(2, 10))
+        
+        self.ext_path_entry = tk.Entry(ext_frame, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9))
+        default_ext = extractor.EXTENSION_PATH
+        if not os.path.exists(default_ext):
+            for candidate in [r"E:\reup SP mơi\Cookie Shopee 26.08.2026", r"E:\reup SP moi\Cookie Shopee 26.08.2026", r"E:\Extension shopee af"]:
+                if os.path.exists(candidate):
+                    default_ext = candidate
+                    break
+        self.ext_path_entry.insert(0, default_ext)
+        self.ext_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        
+        ext_browse_btn = tk.Button(
+            ext_frame, 
+            text="📁 ...", 
+            bg="#3a3a3a", 
+            fg=TEXT_WHITE, 
+            activebackground=BG_HOVER, 
+            activeforeground=TEXT_WHITE, 
+            borderwidth=0, 
+            padx=8, 
+            command=self.browse_extension_path
+        )
+        ext_browse_btn.pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
+        
         # Google Sheet Configuration
         tk.Label(self.left_panel, text="Link Google Sheet:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
         sheet_frame = tk.Frame(self.left_panel, bg=BG_CARD)
@@ -665,6 +693,18 @@ class GemloginCookieGUI:
             self.output_entry.insert(0, filename)
             self.save_config()
 
+    def browse_extension_path(self):
+        cur = self.ext_path_entry.get().strip() if hasattr(self, 'ext_path_entry') else r"E:\\"
+        initial_dir = cur if os.path.isdir(cur) else os.path.dirname(cur)
+        folder = filedialog.askdirectory(
+            initialdir=initial_dir if os.path.exists(initial_dir) else r"E:\\",
+            title="Chọn thư mục chứa Extension Cookie Shopee (có manifest.json)"
+        )
+        if folder:
+            self.ext_path_entry.delete(0, tk.END)
+            self.ext_path_entry.insert(0, os.path.normpath(folder))
+            self.save_config()
+
     def save_config(self):
         """Lưu lại toàn bộ cấu hình cài đặt của người dùng vào file config.json"""
         try:
@@ -676,6 +716,7 @@ class GemloginCookieGUI:
                 "clean_cookie": self.clean_cookie_var.get() if hasattr(self, 'clean_cookie_var') else True,
                 "output_file": self.output_entry.get().strip() if hasattr(self, 'output_entry') else "shopee_cookies.txt",
                 "export_format": self.export_format_var.get() if hasattr(self, 'export_format_var') else "Tên|Cookie",
+                "ext_path": self.ext_path_entry.get().strip() if hasattr(self, 'ext_path_entry') else "",
                 "sheet_url": self.sheet_url_entry.get().strip() if hasattr(self, 'sheet_url_entry') else "",
                 "user_col": self.user_col_entry.get().strip() if hasattr(self, 'user_col_entry') else "E",
                 "profile_col": self.profile_col_entry.get().strip() if hasattr(self, 'profile_col_entry') else "G",
@@ -718,6 +759,10 @@ class GemloginCookieGUI:
                 
             if "export_format" in config and hasattr(self, 'export_format_var'):
                 self.export_format_var.set(str(config["export_format"]))
+                
+            if "ext_path" in config and hasattr(self, 'ext_path_entry'):
+                self.ext_path_entry.delete(0, tk.END)
+                self.ext_path_entry.insert(0, str(config["ext_path"]))
                 
             if "sheet_url" in config and hasattr(self, 'sheet_url_entry'):
                 self.sheet_url_entry.delete(0, tk.END)
@@ -1031,9 +1076,9 @@ class GemloginCookieGUI:
             messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 profile để cài extension.")
             return
             
-        ext_path = extractor.EXTENSION_PATH
-        if not os.path.exists(ext_path):
-            messagebox.showerror("Lỗi", f"Không tìm thấy thư mục extension tại:\n{ext_path}")
+        ext_path = self.ext_path_entry.get().strip() if hasattr(self, 'ext_path_entry') else extractor.EXTENSION_PATH
+        if not ext_path or not os.path.exists(ext_path):
+            messagebox.showerror("Lỗi", f"Không tìm thấy thư mục extension tại:\n{ext_path}\n\nVui lòng kiểm tra lại ô 'Đường dẫn Extension Cookie' ở khung Cấu hình bên trái hoặc bấm nút [📁 ...] để chọn lại thư mục.")
             return
             
         confirm = messagebox.askyesno(
@@ -1088,9 +1133,9 @@ class GemloginCookieGUI:
             messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 profile để mở.")
             return
             
-        ext_path = extractor.EXTENSION_PATH
-        if not os.path.exists(ext_path):
-            messagebox.showerror("Lỗi", f"Không tìm thấy thư mục extension tại:\n{ext_path}")
+        ext_path = self.ext_path_entry.get().strip() if hasattr(self, 'ext_path_entry') else extractor.EXTENSION_PATH
+        if not ext_path or not os.path.exists(ext_path):
+            messagebox.showerror("Lỗi", f"Không tìm thấy thư mục extension tại:\n{ext_path}\n\nVui lòng kiểm tra lại ô 'Đường dẫn Extension Cookie' ở khung Cấu hình bên trái hoặc bấm nút [📁 ...] để chọn lại thư mục.")
             return
             
         country_domain_map = {
@@ -1314,10 +1359,11 @@ class GemloginCookieGUI:
             
             cdp_port = 52000 + (p_id % 5000)
             initial_url = f"https://{target_domain}/buyer/login?from=%2F&next=%2F"
+            current_ext = self.ext_path_entry.get().strip() if hasattr(self, 'ext_path_entry') else extractor.EXTENSION_PATH
             proc, debug_addr = extractor.open_profile_with_extension_and_cdp(
                 p_path, 
                 port=cdp_port, 
-                ext_path=extractor.EXTENSION_PATH, 
+                ext_path=current_ext, 
                 initial_url=initial_url
             )
             if not debug_addr:
