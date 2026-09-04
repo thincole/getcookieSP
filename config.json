@@ -1,0 +1,13 @@
+{
+    "batch_size": "5",
+    "delay": "1",
+    "country": "PH (Philippines)",
+    "mobile_ua": false,
+    "clean_cookie": true,
+    "output_file": "shopee_cookies.txt",
+    "export_format": "Tên|Cookie",
+    "sheet_url": "",
+    "user_col": "E",
+    "profile_col": "G",
+    "default_pass": "Khoa01@c"
+}

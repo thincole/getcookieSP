@@ -1,0 +1,19 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.class
+
+# Shopee output files (Private cookie data)
+shopee_cookies*.txt
+shopee_cookies*.csv
+*.txt.bak
+
+# Archives
+*.rar
+*.zip
+*.7z
+
+# System & IDE
+.vscode/
+.idea/
+Thumbs.db
