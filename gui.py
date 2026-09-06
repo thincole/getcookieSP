@@ -486,19 +486,6 @@ class GemloginCookieGUI:
         
         self.account_map = {}
         
-        # Checkbox Đăng nhập = tài khoản lưu sẵn
-        self.saved_login_var = tk.BooleanVar(value=True)
-        self.saved_login_check = tk.Checkbutton(
-            self.left_panel,
-            text="🔐 Đăng nhập = tài khoản lưu sẵn",
-            variable=self.saved_login_var,
-            bg=BG_CARD, fg="#2ecc71", selectcolor="#2d2d2d",
-            activebackground=BG_CARD, activeforeground="#2ecc71",
-            font=("Arial", 8, "bold"),
-            anchor="w"
-        )
-        self.saved_login_check.pack(fill=tk.X, pady=(2, 4))
-        
         # Divider
         tk.Frame(self.left_panel, bg="#2d2d2d", height=1).pack(fill=tk.X, pady=(6, 6))
         
@@ -528,7 +515,6 @@ class GemloginCookieGUI:
         
         self.stop_btn = None
         self.refresh_btn = None
-        self.saved_login_btn = None
         
         self.install_ext_btn = tk.Button(
             self.left_panel, 
@@ -833,8 +819,7 @@ class GemloginCookieGUI:
                 "sheet_url": self.sheet_url_entry.get().strip() if hasattr(self, 'sheet_url_entry') else "",
                 "user_col": self.user_col_entry.get().strip() if hasattr(self, 'user_col_entry') else "E",
                 "profile_col": self.profile_col_entry.get().strip() if hasattr(self, 'profile_col_entry') else "G",
-                "default_pass": self.default_pass_entry.get().strip() if hasattr(self, 'default_pass_entry') else "Khoa01@c",
-                "saved_login": self.saved_login_var.get() if hasattr(self, 'saved_login_var') else True
+                "default_pass": self.default_pass_entry.get().strip() if hasattr(self, 'default_pass_entry') else "Khoa01@c"
             }
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=4)
@@ -893,9 +878,6 @@ class GemloginCookieGUI:
             if "default_pass" in config and hasattr(self, 'default_pass_entry'):
                 self.default_pass_entry.delete(0, tk.END)
                 self.default_pass_entry.insert(0, str(config["default_pass"]))
-                
-            if "saved_login" in config and hasattr(self, 'saved_login_var'):
-                self.saved_login_var.set(bool(config["saved_login"]))
                 
         except Exception as e:
             print(f"Error loading config: {e}")
@@ -1302,8 +1284,6 @@ class GemloginCookieGUI:
         self.is_extracting = True
         self.stop_requested = False
         self.start_btn.config(state=tk.NORMAL, text="🛑 DỪNG TIẾN TRÌNH", bg="#c0392b", activebackground="#962d22")
-        if hasattr(self, 'saved_login_btn') and self.saved_login_btn:
-            self.saved_login_btn.config(state=tk.DISABLED)
         if hasattr(self, 'auto_fb_login_btn') and self.auto_fb_login_btn:
             self.auto_fb_login_btn.config(state=tk.DISABLED)
         if self.stop_btn:
@@ -1578,8 +1558,6 @@ class GemloginCookieGUI:
         self.is_extracting = True
         self.stop_requested = False
         self.start_btn.config(state=tk.NORMAL, text="🛑 DỪNG TIẾN TRÌNH", bg="#c0392b", activebackground="#962d22")
-        if hasattr(self, 'saved_login_btn') and self.saved_login_btn:
-            self.saved_login_btn.config(state=tk.DISABLED)
         if hasattr(self, 'auto_fb_login_btn') and self.auto_fb_login_btn:
             self.auto_fb_login_btn.config(state=tk.DISABLED)
         if self.stop_btn:
@@ -1696,10 +1674,10 @@ class GemloginCookieGUI:
                 is_logged_in = True
                 self.log(f"✨ [{p_id}] {p_name}: Profile đã có phiên đăng nhập Shopee hợp lệ từ trước!")
                 
-            # 1. BƯỚC 1 (ƯU TIÊN): Nếu tick chọn "Đăng nhập = tài khoản lưu sẵn"
-            if not is_logged_in and hasattr(self, 'saved_login_var') and self.saved_login_var.get():
-                self.log(f"🔐 [{p_id}] {p_name}: Ưu tiên đăng nhập bằng tài khoản lưu sẵn trong trình duyệt...")
-                self.ui_update_queue.put(('status', (p_id, "Đang ấn Login lưu sẵn...", STATUS_RUNNING)))
+            # 1. BƯỚC 1 (ƯU TIÊN): Kiểm tra tài khoản lưu sẵn (autofill) trong trình duyệt
+            if not is_logged_in:
+                self.log(f"🔐 [{p_id}] {p_name}: Kiểm tra tài khoản lưu sẵn trong trình duyệt...")
+                self.ui_update_queue.put(('status', (p_id, "Kiểm tra login lưu sẵn...", STATUS_RUNNING)))
                 
                 # Đảm bảo đang mở trang đăng nhập
                 try:
@@ -2049,8 +2027,6 @@ class GemloginCookieGUI:
         
         # Reset UI controls
         self.start_btn.config(state=tk.NORMAL, text="🚀 BẮT ĐẦU TRÍCH XUẤT", bg=ACCENT_ORANGE, activebackground="#d63d1e")
-        if hasattr(self, 'saved_login_btn') and self.saved_login_btn:
-            self.saved_login_btn.config(state=tk.NORMAL)
         if hasattr(self, 'auto_fb_login_btn') and self.auto_fb_login_btn:
             self.auto_fb_login_btn.config(state=tk.NORMAL)
         if self.stop_btn:
