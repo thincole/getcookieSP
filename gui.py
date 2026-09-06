@@ -1687,9 +1687,7 @@ class GemloginCookieGUI:
                     ws_nav.close()
                 except Exception:
                     pass
-                time.sleep(3.0)
-                
-                res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain)
+                res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain, default_password=default_pass)
                 ok_saved = res_saved[0] if isinstance(res_saved, (tuple, list)) else bool(res_saved)
                 msg_saved = res_saved[1] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 1 else str(res_saved)
                 saved_user = res_saved[2] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 2 else ""
