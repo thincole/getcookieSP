@@ -516,6 +516,20 @@ class GemloginCookieGUI:
         self.stop_btn = None
         self.refresh_btn = None
         
+        self.saved_login_btn = tk.Button(
+            self.left_panel, 
+            text="🔐 ĐĂNG NHẬP = TÀI KHOẢN LƯU SẴN", 
+            bg="#27ae60", 
+            fg=TEXT_WHITE, 
+            activebackground="#1e8449", 
+            activeforeground=TEXT_WHITE,
+            font=("Arial", 9, "bold"),
+            borderwidth=0, 
+            pady=6, 
+            command=self.auto_saved_login_and_extract
+        )
+        self.saved_login_btn.pack(fill=tk.X, pady=2)
+        
         self.install_ext_btn = tk.Button(
             self.left_panel, 
             text="🧩 CÀI EXTENSION VÀO PROFILE ĐÃ CHỌN", 
@@ -1284,6 +1298,10 @@ class GemloginCookieGUI:
         self.is_extracting = True
         self.stop_requested = False
         self.start_btn.config(state=tk.NORMAL, text="🛑 DỪNG TIẾN TRÌNH", bg="#c0392b", activebackground="#962d22")
+        if hasattr(self, 'saved_login_btn') and self.saved_login_btn:
+            self.saved_login_btn.config(state=tk.DISABLED)
+        if hasattr(self, 'auto_fb_login_btn') and self.auto_fb_login_btn:
+            self.auto_fb_login_btn.config(state=tk.DISABLED)
         if self.stop_btn:
             self.stop_btn.config(state=tk.NORMAL)
         if hasattr(self, 'refresh_btn') and self.refresh_btn:
@@ -1513,6 +1531,286 @@ class GemloginCookieGUI:
         else:
             messagebox.showerror("Lỗi", msg)
 
+    def auto_saved_login_and_extract(self):
+        """Tự động mở từng profile, nhấn nút LOG IN với tài khoản lưu sẵn trên trình duyệt & trích xuất Cookie"""
+        if self.is_extracting:
+            messagebox.showwarning("Cảnh báo", "Một tiến trình khác đang chạy. Vui lòng đợi hoặc dừng lại trước.")
+            return
+            
+        selected_ids = [p_id for p_id, row in self.profile_rows.items() if row.var.get()]
+        if not selected_ids:
+            messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 profile để thực hiện đăng nhập.")
+            return
+            
+        self.save_config()
+            
+        country_domain_map = {
+            "Tất cả (All)": "shopee.ph",
+            "VN (Việt Nam)": "shopee.vn",
+            "PH (Philippines)": "shopee.ph",
+            "MY (Malaysia)": "shopee.com.my",
+            "ID (Indonesia)": "shopee.co.id",
+            "TH (Thái Lan)": "shopee.co.th",
+            "TW (Đài Loan)": "shopee.tw"
+        }
+        target_domain = country_domain_map.get(self.country_var.get(), "shopee.ph")
+        output_file = self.output_entry.get().strip() or "shopee_cookies.txt"
+        clean_cookie = self.clean_cookie_var.get()
+        
+        try:
+            batch_size = int(self.batch_entry.get().strip())
+            if batch_size <= 0:
+                batch_size = 1
+        except ValueError:
+            batch_size = 3
+            
+        confirm = messagebox.askyesno(
+            "Xác nhận Đăng nhập Tài khoản lưu sẵn",
+            f"Bạn có chắc muốn tự động Đăng nhập bằng tài khoản lưu sẵn trên trình duyệt & Lấy Cookie cho {len(selected_ids)} profile đã chọn không?\n\nSố luồng đồng thời: {batch_size}\nThị trường: {target_domain}\nFile lưu: {output_file}"
+        )
+        if not confirm:
+            return
+            
+        self.is_extracting = True
+        self.stop_requested = False
+        self.start_btn.config(state=tk.NORMAL, text="🛑 DỪNG TIẾN TRÌNH", bg="#c0392b", activebackground="#962d22")
+        if hasattr(self, 'saved_login_btn') and self.saved_login_btn:
+            self.saved_login_btn.config(state=tk.DISABLED)
+        if hasattr(self, 'auto_fb_login_btn') and self.auto_fb_login_btn:
+            self.auto_fb_login_btn.config(state=tk.DISABLED)
+        if self.stop_btn:
+            self.stop_btn.config(state=tk.NORMAL)
+        if hasattr(self, 'refresh_btn') and self.refresh_btn:
+            self.refresh_btn.config(state=tk.DISABLED)
+        self.progress_lbl.config(text=f"Tiến độ: 0 / {len(selected_ids)}")
+        self.progress_bar.config(maximum=len(selected_ids), value=0)
+        
+        threading.Thread(
+            target=self.run_auto_saved_login_thread, 
+            args=(selected_ids, target_domain, output_file, clean_cookie, batch_size), 
+            daemon=True
+        ).start()
+
+    def run_auto_saved_login_thread(self, selected_ids, target_domain, output_file, clean_cookie, batch_size=3):
+        self.log(f"=== Bắt đầu Đăng nhập bằng Tài khoản Lưu Sẵn cho {len(selected_ids)} profile (Số luồng: {batch_size}) ===")
+        self.log(f"Thị trường: {target_domain} | File lưu: {os.path.abspath(output_file)}")
+        
+        self.running_ids_before = extractor.get_running_profiles()
+        is_txt = output_file.endswith('.txt')
+        file_lock = threading.Lock()
+        
+        try:
+            if is_txt:
+                txt_file = open(output_file, mode="a" if os.path.exists(output_file) else "w", encoding="utf-8")
+            else:
+                exists = os.path.exists(output_file)
+                csv_file = open(output_file, mode="a" if exists else "w", encoding="utf-8", newline="")
+                csv_writer = csv.writer(csv_file)
+                if not exists:
+                    csv_writer.writerow(["Profile ID", "Profile Name", "Domain", "Status", "Cookie", "User Agent", "Exported At"])
+        except Exception as e:
+            self.log(f"❌ Không thể mở file kết quả để ghi: {e}")
+            self.ui_update_queue.put(('finished', (0, 0)))
+            return
+            
+        success_count = 0
+        processed_count = 0
+        total_selected = len(selected_ids)
+        p_lookup = {p['id']: p for p in self.profiles}
+        
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def worker_saved_login(p_id):
+            nonlocal success_count, processed_count
+            if self.stop_requested:
+                return
+                
+            p_info = p_lookup.get(p_id)
+            p_name = p_info.get('name', f'Profile #{p_id}') if p_info else f'Profile #{p_id}'
+            p_path = p_info.get('profile_path') if p_info else f"F:\\gemlogin\\profiles\\{p_id}"
+            
+            self.ui_update_queue.put(('status', (p_id, "Đang mở...", STATUS_RUNNING)))
+            self.log(f"🚀 [{p_id}] {p_name}: Đang mở trình duyệt...")
+            
+            # Ưu tiên mở profile qua Gemlogin API để giữ nguyên fingerprint & tài khoản đã lưu
+            debug_addr, driver = extractor.api_start_profile(p_id)
+            proc = None
+            if not debug_addr:
+                cdp_port = 52000 + (p_id % 5000)
+                initial_url = f"https://{target_domain}/buyer/login?from=%2F&next=%2F"
+                current_ext = self.ext_path_entry.get().strip() if hasattr(self, 'ext_path_entry') else extractor.EXTENSION_PATH
+                proc, debug_addr = extractor.open_profile_with_extension_and_cdp(
+                    p_path, 
+                    port=cdp_port, 
+                    ext_path=current_ext, 
+                    initial_url=initial_url
+                )
+                
+            if not debug_addr:
+                self.log(f"❌ [{p_id}] {p_name}: Không thể khởi động profile")
+                self.ui_update_queue.put(('status', (p_id, "Lỗi khởi động", STATUS_ERROR)))
+                with file_lock:
+                    processed_count += 1
+                    self.ui_update_queue.put(('progress', (processed_count, total_selected)))
+                return
+                
+            time.sleep(2.5)
+            ws_url = extractor.get_websocket_url(debug_addr)
+            if not ws_url:
+                self.log(f"❌ [{p_id}] {p_name}: Không tìm thấy cổng kết nối CDP")
+                if p_id not in self.running_ids_before:
+                    if proc:
+                        proc.terminate()
+                        try: proc.wait(timeout=2)
+                        except Exception: pass
+                    else:
+                        extractor.api_close_profile(p_id)
+                self.ui_update_queue.put(('status', (p_id, "Lỗi CDP", STATUS_ERROR)))
+                with file_lock:
+                    processed_count += 1
+                    self.ui_update_queue.put(('progress', (processed_count, total_selected)))
+                return
+                
+            is_logged_in = False
+            cookie_tuple = None
+            
+            # 1. Kiểm tra trước: Profile đã login Shopee sẵn chưa?
+            cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+            formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+            cookie_tuple = formatted.get(target_domain)
+            if cookie_tuple and cookie_tuple[1]:
+                is_logged_in = True
+                self.log(f"✨ [{p_id}] {p_name}: Profile đã có phiên đăng nhập Shopee hợp lệ từ trước!")
+                
+            # 2. Nếu chưa login: Mở trang login và bấm nút LOG IN
+            if not is_logged_in:
+                self.log(f"🔐 [{p_id}] {p_name}: Mở trang login & chuẩn bị ấn nút LOG IN...")
+                self.ui_update_queue.put(('status', (p_id, "Đang bấm Login...", STATUS_RUNNING)))
+                
+                # Điều hướng sang trang login nếu đang ở trang khác
+                try:
+                    ws_nav = websocket.create_connection(ws_url, suppress_origin=True, timeout=8)
+                    ws_nav.send(json.dumps({'id': 101, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/buyer/login?from=%2F&next=%2F"}}))
+                    ws_nav.recv()
+                    ws_nav.close()
+                except Exception:
+                    pass
+                time.sleep(2.5)
+                
+                ok_click, msg_click = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain)
+                self.log(f"👉 [{p_id}] {p_name}: {msg_click}")
+                
+                # Chờ đăng nhập và kiểm tra cookie định kỳ (tối đa 12 giây)
+                for _ in range(6):
+                    if self.stop_requested:
+                        break
+                    time.sleep(2)
+                    cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                    formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                    cookie_tuple = formatted.get(target_domain)
+                    if cookie_tuple and cookie_tuple[1]:
+                        is_logged_in = True
+                        break
+                        
+                # 3. Kiểm tra Captcha / OTP nếu chưa đăng nhập
+                if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
+                    self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP! Đang chờ bạn thao tác giải (tối đa 90 giây)...")
+                    self.ui_update_queue.put(('status', (p_id, "Chờ giải Captcha/OTP", STATUS_WARNING)))
+                    start_wait = time.time()
+                    while time.time() - start_wait < 90:
+                        if self.stop_requested:
+                            break
+                        time.sleep(3)
+                        cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                        formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                        cookie_tuple = formatted.get(target_domain)
+                        if cookie_tuple and cookie_tuple[1]:
+                            is_logged_in = True
+                            self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
+                            break
+                            
+                # 4. Kiểm tra nạp trang chủ một lần cuối nếu cookie chưa chuyển
+                if not is_logged_in:
+                    try:
+                        ws_chk = websocket.create_connection(ws_url, suppress_origin=True, timeout=5)
+                        ws_chk.send(json.dumps({'id': 402, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/"}}))
+                        ws_chk.recv()
+                        ws_chk.close()
+                        time.sleep(3)
+                    except Exception:
+                        pass
+                    cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                    formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                    cookie_tuple = formatted.get(target_domain)
+                    is_logged_in = cookie_tuple[1] if cookie_tuple else False
+                    
+            # 5. Lưu kết quả Cookie
+            cookie_str = ""
+            if cookie_tuple:
+                cookie_str = cookie_tuple[0]
+                if is_logged_in:
+                    fmt = self.export_format_var.get() if hasattr(self, 'export_format_var') else "Tên|Cookie"
+                    if "Chỉ Cookie" in fmt:
+                        out_line = f"{cookie_str}"
+                    else:
+                        out_line = f"{p_name}|{cookie_str}"
+                        
+                    with file_lock:
+                        success_count += 1
+                        if is_txt:
+                            txt_file.write(f"{out_line}\n")
+                            txt_file.flush()
+                        else:
+                            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            csv_writer.writerow([p_id, p_name, target_domain, "Đã đăng nhập", cookie_str, ua, now_str])
+                            csv_file.flush()
+                    status_text = "Đã lấy Cookie (Đã login)"
+                    status_color = STATUS_SUCCESS
+                    self.log(f"✅ [{p_id}] {p_name}: Đăng nhập & Trích xuất Cookie thành công!")
+                else:
+                    status_text = "Chưa login Shopee"
+                    status_color = STATUS_READY
+                    self.log(f"⚠️ [{p_id}] {p_name}: Chưa nhận phiên đăng nhập")
+            else:
+                status_text = "Không có cookie"
+                status_color = STATUS_ERROR
+                self.log(f"❌ [{p_id}] {p_name}: Không tìm thấy cookie")
+                
+            self.ui_update_queue.put(('status', (p_id, status_text, status_color)))
+            with file_lock:
+                processed_count += 1
+                self.ui_update_queue.put(('progress', (processed_count, total_selected)))
+                
+            # 6. Đóng profile sạch sẽ nếu trước đó chưa mở sẵn
+            if p_id not in self.running_ids_before:
+                try:
+                    ws_c = websocket.create_connection(ws_url, suppress_origin=True, timeout=2)
+                    ws_c.send(json.dumps({'id': 999, 'method': 'Browser.close'}))
+                    ws_c.close()
+                except Exception:
+                    pass
+                if proc:
+                    try:
+                        proc.wait(timeout=2)
+                    except Exception:
+                        subprocess.run(f"taskkill /F /PID {proc.pid}", shell=True, capture_output=True)
+                else:
+                    extractor.api_close_profile(p_id)
+                    
+        # Chạy đa luồng theo batch_size
+        with ThreadPoolExecutor(max_workers=batch_size) as executor:
+            executor.map(worker_saved_login, selected_ids)
+            
+        try:
+            if is_txt:
+                txt_file.close()
+            else:
+                csv_file.close()
+        except Exception:
+            pass
+            
+        self.ui_update_queue.put(('finished', (success_count, total_selected)))
+
     def auto_login_fb_and_extract(self):
         """Tự động mở từng profile, bấm Login with Facebook, bấm Continue (hoặc Fallback tài khoản Google Sheet) và trích xuất Cookie sạch chuẩn MLS"""
         if self.is_extracting:
@@ -1556,6 +1854,10 @@ class GemloginCookieGUI:
         self.is_extracting = True
         self.stop_requested = False
         self.start_btn.config(state=tk.NORMAL, text="🛑 DỪNG TIẾN TRÌNH", bg="#c0392b", activebackground="#962d22")
+        if hasattr(self, 'saved_login_btn') and self.saved_login_btn:
+            self.saved_login_btn.config(state=tk.DISABLED)
+        if hasattr(self, 'auto_fb_login_btn') and self.auto_fb_login_btn:
+            self.auto_fb_login_btn.config(state=tk.DISABLED)
         if self.stop_btn:
             self.stop_btn.config(state=tk.NORMAL)
         if hasattr(self, 'refresh_btn') and self.refresh_btn:
@@ -1963,6 +2265,10 @@ class GemloginCookieGUI:
         
         # Reset UI controls
         self.start_btn.config(state=tk.NORMAL, text="🚀 BẮT ĐẦU TRÍCH XUẤT", bg=ACCENT_ORANGE, activebackground="#d63d1e")
+        if hasattr(self, 'saved_login_btn') and self.saved_login_btn:
+            self.saved_login_btn.config(state=tk.NORMAL)
+        if hasattr(self, 'auto_fb_login_btn') and self.auto_fb_login_btn:
+            self.auto_fb_login_btn.config(state=tk.NORMAL)
         if self.stop_btn:
             self.stop_btn.config(state=tk.DISABLED, text="🛑 DỪNG TIẾN TRÌNH")
         if hasattr(self, 'refresh_btn') and self.refresh_btn:

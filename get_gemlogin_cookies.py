@@ -1144,6 +1144,124 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
     except Exception as e:
         return False, f"Lỗi đăng nhập bằng tài khoản: {e}"
 
+def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
+    """
+    Tự động nhấn nút 'LOG IN' trên trang đăng nhập Shopee khi tài khoản đã được lưu sẵn trong trình duyệt.
+    1. Đảm bảo form đã tải và ô input được autofill / focus.
+    2. Kích hoạt sự kiện input/change trên các trường đã điền để Shopee React state hợp lệ hóa form.
+    3. Tìm nút 'LOG IN' / 'Log In' / 'Đăng nhập' và gửi sự kiện click (DOM click + CDP Trusted Mouse Click).
+    """
+    try:
+        ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=20)
+        
+        # Script kiểm tra form, autofill và tìm nút bấm
+        click_script = """
+        (() => {
+            const inputs = Array.from(document.querySelectorAll('input'));
+            const userInput = inputs.find(i => i.type !== 'password' && i.type !== 'hidden');
+            const passInput = inputs.find(i => i.type === 'password');
+            
+            // Kích hoạt event nếu đã có giá trị từ browser password manager
+            if (userInput && userInput.value) {
+                userInput.dispatchEvent(new Event('input', { bubbles: true }));
+                userInput.dispatchEvent(new Event('change', { bubbles: true }));
+            } else if (userInput) {
+                try {
+                    userInput.focus();
+                    userInput.click();
+                } catch(e) {}
+            }
+            
+            if (passInput && passInput.value) {
+                passInput.dispatchEvent(new Event('input', { bubbles: true }));
+                passInput.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            
+            // Tìm nút LOG IN chính
+            const allElements = Array.from(document.querySelectorAll('button, input[type="submit"], div[role="button"], a'));
+            let targetBtn = null;
+            
+            for (const el of allElements) {
+                if (el.closest('footer') || el.closest('.footer')) continue;
+                const t = (el.innerText || el.textContent || el.value || '').trim().toLowerCase();
+                if (t === 'login' || t === 'log in' || t === 'đăng nhập') {
+                    if (!t.includes('qr') && !t.includes('facebook') && !t.includes('google')) {
+                        targetBtn = el;
+                        break;
+                    }
+                }
+            }
+            
+            if (!targetBtn) {
+                // Fallback: Tìm nút submit trong form login
+                const formBtn = document.querySelector('form button, button[type="submit"]');
+                if (formBtn) {
+                    const t = (formBtn.innerText || formBtn.textContent || '').trim().toLowerCase();
+                    if (!t.includes('qr') && !t.includes('facebook') && !t.includes('google')) {
+                        targetBtn = formBtn;
+                    }
+                }
+            }
+            
+            if (targetBtn) {
+                targetBtn.scrollIntoView({block: 'center'});
+                const rect = targetBtn.getBoundingClientRect();
+                
+                // Kích hoạt DOM click
+                try { targetBtn.click(); } catch(e) {}
+                
+                return {
+                    success: true,
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2),
+                    btnText: (targetBtn.innerText || targetBtn.textContent || '').trim(),
+                    user: userInput ? userInput.value : '',
+                    hasPass: Boolean(passInput && passInput.value)
+                };
+            }
+            
+            return {
+                success: false,
+                user: userInput ? userInput.value : '',
+                hasPass: Boolean(passInput && passInput.value)
+            };
+        })()
+        """
+        
+        found = False
+        coords = {}
+        for attempt in range(5):
+            ws.send(json.dumps({'id': 350 + attempt, 'method': 'Runtime.evaluate', 'params': {'expression': click_script, 'returnByValue': True}}))
+            raw = ws.recv()
+            coords = json.loads(raw).get('result', {}).get('result', {}).get('value', {})
+            if coords and coords.get('success'):
+                found = True
+                break
+            time.sleep(1.2)
+            
+        if found:
+            lx, ly = coords['x'], coords['y']
+            
+            # Gửi Trusted Mouse Events qua CDP
+            ws.send(json.dumps({'id': 360, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseMoved', 'x': lx, 'y': ly}}))
+            ws.recv()
+            ws.send(json.dumps({'id': 361, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mousePressed', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
+            ws.recv()
+            time.sleep(0.08)
+            ws.send(json.dumps({'id': 362, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseReleased', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
+            ws.recv()
+            
+            user_label = coords.get('user')
+            ws.close()
+            if user_label:
+                return True, f"Đã ấn nút LOG IN cho tài khoản '{user_label}'"
+            return True, "Đã ấn nút LOG IN"
+            
+        ws.close()
+        return False, "Không tìm thấy nút 'LOG IN' hoặc form đăng nhập chưa sẵn sàng"
+    except Exception as e:
+        return False, f"Lỗi khi ấn nút đăng nhập lưu sẵn: {e}"
+
 def check_captcha_or_otp_presence(ws_url):
     """
     Kiểm tra xem trang hiện tại có đang hiển thị Captcha kéo mảnh ghép, mã OTP, hoặc màn hình xác minh không.
