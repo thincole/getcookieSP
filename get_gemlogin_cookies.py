@@ -1146,36 +1146,38 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
 
 def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
     """
-    Tự động nhấn nút 'LOG IN' trên trang đăng nhập Shopee khi tài khoản đã được lưu sẵn trong trình duyệt.
-    1. Đảm bảo form đã tải và ô input được autofill / focus.
-    2. Kích hoạt sự kiện input/change trên các trường đã điền để Shopee React state hợp lệ hóa form.
-    3. Tìm nút 'LOG IN' / 'Log In' / 'Đăng nhập' và gửi sự kiện click (DOM click + CDP Trusted Mouse Click).
+    Kiểm tra xem Username và Password đã được lưu sẵn (autofill) trong trình duyệt hay chưa:
+    - Nếu CẢ 2 ĐỀU ĐÃ CÓ SẴN: Tự động bấm nút 'LOG IN' (DOM click + CDP Trusted Mouse Click) và trả về (True, message, username)
+    - Nếu CHƯA CÓ SẴN (ô username hoặc password bị trống): KHÔNG bấm nút LOG IN và trả về (False, "Không có tài khoản lưu sẵn", None)
     """
     try:
         ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=20)
         
-        # Script kiểm tra form, autofill và tìm nút bấm
         click_script = """
         (() => {
             const inputs = Array.from(document.querySelectorAll('input'));
             const userInput = inputs.find(i => i.type !== 'password' && i.type !== 'hidden');
             const passInput = inputs.find(i => i.type === 'password');
             
-            // Kích hoạt event nếu đã có giá trị từ browser password manager
-            if (userInput && userInput.value) {
-                userInput.dispatchEvent(new Event('input', { bubbles: true }));
-                userInput.dispatchEvent(new Event('change', { bubbles: true }));
-            } else if (userInput) {
-                try {
-                    userInput.focus();
-                    userInput.click();
-                } catch(e) {}
+            const uVal = userInput ? (userInput.value || '').trim() : '';
+            const pVal = passInput ? (passInput.value || '') : '';
+            
+            // Chỉ coi là đã lưu sẵn nếu CẢ 2 ô username và password đều có dữ liệu
+            const hasSaved = Boolean(uVal.length > 0 && pVal.length > 0);
+            
+            if (!hasSaved) {
+                return {
+                    hasSaved: false,
+                    user: uVal,
+                    hasPass: Boolean(pVal.length > 0)
+                };
             }
             
-            if (passInput && passInput.value) {
-                passInput.dispatchEvent(new Event('input', { bubbles: true }));
-                passInput.dispatchEvent(new Event('change', { bubbles: true }));
-            }
+            // Kích hoạt event nếu đã có giá trị từ browser password manager
+            userInput.dispatchEvent(new Event('input', { bubbles: true }));
+            userInput.dispatchEvent(new Event('change', { bubbles: true }));
+            passInput.dispatchEvent(new Event('input', { bubbles: true }));
+            passInput.dispatchEvent(new Event('change', { bubbles: true }));
             
             // Tìm nút LOG IN chính
             const allElements = Array.from(document.querySelectorAll('button, input[type="submit"], div[role="button"], a'));
@@ -1193,7 +1195,6 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
             }
             
             if (!targetBtn) {
-                // Fallback: Tìm nút submit trong form login
                 const formBtn = document.querySelector('form button, button[type="submit"]');
                 if (formBtn) {
                     const t = (formBtn.innerText || formBtn.textContent || '').trim().toLowerCase();
@@ -1211,35 +1212,36 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
                 try { targetBtn.click(); } catch(e) {}
                 
                 return {
-                    success: true,
+                    hasSaved: true,
+                    btnFound: true,
                     x: Math.round(rect.left + rect.width / 2),
                     y: Math.round(rect.top + rect.height / 2),
-                    btnText: (targetBtn.innerText || targetBtn.textContent || '').trim(),
-                    user: userInput ? userInput.value : '',
-                    hasPass: Boolean(passInput && passInput.value)
+                    user: uVal
                 };
             }
             
             return {
-                success: false,
-                user: userInput ? userInput.value : '',
-                hasPass: Boolean(passInput && passInput.value)
+                hasSaved: true,
+                btnFound: false,
+                user: uVal
             };
         })()
         """
         
-        found = False
         coords = {}
-        for attempt in range(5):
+        for attempt in range(4):
             ws.send(json.dumps({'id': 350 + attempt, 'method': 'Runtime.evaluate', 'params': {'expression': click_script, 'returnByValue': True}}))
             raw = ws.recv()
             coords = json.loads(raw).get('result', {}).get('result', {}).get('value', {})
-            if coords and coords.get('success'):
-                found = True
+            if coords and coords.get('hasSaved'):
                 break
-            time.sleep(1.2)
+            time.sleep(1.0)
             
-        if found:
+        if not coords or not coords.get('hasSaved'):
+            ws.close()
+            return False, "Không có tài khoản lưu sẵn (Username/Password trống)", None
+            
+        if coords.get('btnFound'):
             lx, ly = coords['x'], coords['y']
             
             # Gửi Trusted Mouse Events qua CDP
@@ -1251,16 +1253,14 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
             ws.send(json.dumps({'id': 362, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseReleased', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
             ws.recv()
             
-            user_label = coords.get('user')
+            user_label = coords.get('user') or ''
             ws.close()
-            if user_label:
-                return True, f"Đã ấn nút LOG IN cho tài khoản '{user_label}'"
-            return True, "Đã ấn nút LOG IN"
+            return True, f"Đã có sẵn tài khoản '{user_label}' & đã ấn nút LOG IN", user_label
             
         ws.close()
-        return False, "Không tìm thấy nút 'LOG IN' hoặc form đăng nhập chưa sẵn sàng"
+        return False, "Có tài khoản lưu sẵn nhưng không tìm thấy nút LOG IN", coords.get('user')
     except Exception as e:
-        return False, f"Lỗi khi ấn nút đăng nhập lưu sẵn: {e}"
+        return False, f"Lỗi khi kiểm tra tài khoản lưu sẵn: {e}", None
 
 def check_captcha_or_otp_presence(ws_url):
     """

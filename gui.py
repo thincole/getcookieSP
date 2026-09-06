@@ -1711,38 +1711,44 @@ class GemloginCookieGUI:
                     pass
                 time.sleep(2.5)
                 
-                ok_saved, msg_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain)
+                res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain)
+                ok_saved = res_saved[0] if isinstance(res_saved, (tuple, list)) else bool(res_saved)
+                msg_saved = res_saved[1] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 1 else str(res_saved)
+                saved_user = res_saved[2] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 2 else ""
+                
                 self.log(f"👉 [{p_id}] {p_name}: {msg_saved}")
                 
-                # Chờ kiểm tra kết quả đăng nhập (tối đa 8 giây)
-                for _ in range(4):
-                    if self.stop_requested:
-                        break
-                    time.sleep(2)
-                    cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
-                    formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
-                    cookie_tuple = formatted.get(target_domain)
-                    if cookie_tuple and cookie_tuple[1]:
-                        is_logged_in = True
-                        self.log(f"🎉 [{p_id}] {p_name}: Đăng nhập tài khoản lưu sẵn thành công!")
-                        break
-                        
-                # Bắt Captcha/OTP nếu có
-                if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
-                    self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP! Đang chờ bạn thao tác giải (tối đa 90 giây)...")
-                    self.ui_update_queue.put(('status', (p_id, "Chờ giải Captcha/OTP", STATUS_WARNING)))
-                    start_wait = time.time()
-                    while time.time() - start_wait < 90:
+                if ok_saved:
+                    # Chờ kiểm tra kết quả đăng nhập (tối đa 8 giây)
+                    for _ in range(4):
                         if self.stop_requested:
                             break
-                        time.sleep(3)
+                        time.sleep(2)
                         cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
                         formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
                         cookie_tuple = formatted.get(target_domain)
                         if cookie_tuple and cookie_tuple[1]:
                             is_logged_in = True
-                            self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
+                            user_display = f" '{saved_user}'" if saved_user else ""
+                            self.log(f"🎉 [{p_id}] {p_name}: Đăng nhập tài khoản lưu sẵn{user_display} thành công!")
                             break
+                            
+                    # Bắt Captcha/OTP nếu có
+                    if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
+                        self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP! Đang chờ bạn thao tác giải (tối đa 90 giây)...")
+                        self.ui_update_queue.put(('status', (p_id, "Chờ giải Captcha/OTP", STATUS_WARNING)))
+                        start_wait = time.time()
+                        while time.time() - start_wait < 90:
+                            if self.stop_requested:
+                                break
+                            time.sleep(3)
+                            cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                            formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                            cookie_tuple = formatted.get(target_domain)
+                            if cookie_tuple and cookie_tuple[1]:
+                                is_logged_in = True
+                                self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
+                                break
 
             # 2. BƯỚC 2: Nếu chưa login được -> Đăng nhập bằng Username & Mật khẩu từ Google Sheet (nếu có)
             if not is_logged_in:
