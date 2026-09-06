@@ -108,6 +108,8 @@ if errorlevel 1 (
     ) else if exist "%PUBLIC%\Desktop\Gemlogin.lnk" (
         start "" "%PUBLIC%\Desktop\Gemlogin.lnk"
     )
+    echo [*] Cho Gemlogin khoi dong ban dau (3 giay)...
+    timeout /t 3 >nul
 ) else (
     echo [OK] Gemlogin da dang chay san.
 )

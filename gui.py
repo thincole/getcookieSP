@@ -509,7 +509,7 @@ class GemloginCookieGUI:
             font=("Arial", 9),
             borderwidth=0, 
             pady=8, 
-            command=self.load_profiles
+            command=lambda: self.load_profiles(is_manual=True)
         )
         self.refresh_btn.pack(fill=tk.X, pady=(15, 5))
         
@@ -1076,7 +1076,7 @@ class GemloginCookieGUI:
         self.stat_selected_lbl.config(text=f"Đã chọn: {selected}")
         self.stat_running_lbl.config(text=f"Đang chạy sẵn trên máy: {running}")
         
-    def load_profiles(self):
+    def load_profiles(self, is_manual=False):
         # Clear existing profile list UI
         for row in self.profile_rows.values():
             row.frame.destroy()
@@ -1089,17 +1089,19 @@ class GemloginCookieGUI:
         
         self.log("Đang tải danh sách profile từ API cục bộ Gemlogin (127.0.0.1:1010)...")
         
-        # Get groups from API
+        # Get groups from API (thử lại tối đa 3 lần)
         self.groups = []
-        try:
-            import urllib.request
-            req = urllib.request.Request(f"{extractor.GEMLOGIN_API}/api/groups")
-            with urllib.request.urlopen(req, timeout=10) as response:
-                res = json.loads(response.read().decode('utf-8'))
-                if res.get('success'):
-                    self.groups = res.get('data', [])
-        except Exception:
-            pass
+        for _ in range(3):
+            try:
+                import urllib.request
+                req = urllib.request.Request(f"{extractor.GEMLOGIN_API}/api/groups", headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    res = json.loads(response.read().decode('utf-8'))
+                    if res.get('success'):
+                        self.groups = res.get('data', [])
+                        break
+            except Exception:
+                time.sleep(1)
         
         # Update group dropdown
         menu = self.group_menu["menu"]
@@ -1112,11 +1114,17 @@ class GemloginCookieGUI:
         self.group_var.set("Tất cả nhóm")
         self.log(f"Tìm thấy {len(self.groups)} nhóm: {', '.join(g['name'] for g in self.groups) if self.groups else '(không có)'}")
         
-        # Get profiles from API
-        self.profiles = extractor.api_get_profiles()
+        # Get profiles from API với tự động retry (4 lần, cách nhau 2 giây)
+        self.profiles = extractor.api_get_profiles(
+            retries=4, 
+            delay=2.0, 
+            logger_callback=lambda m: (self.log(m), self.write_log_to_widget(m), self.root.update_idletasks())
+        )
         if not self.profiles:
-            self.log("⚠️ Không thể tải danh sách profile. Đảm bảo phần mềm Gemlogin đang mở và tính năng API được bật.")
-            messagebox.showerror("Lỗi", "Không thể kết nối tới Gemlogin API cục bộ trên cổng 1010. Vui lòng mở phần mềm Gemlogin và thử lại.")
+            self.log("⚠️ Không thể kết nối tới Gemlogin API cục bộ trên cổng 1010.")
+            self.log("💡 Vui lòng đảm bảo phần mềm Gemlogin đang mở và bấm nút '🔄 TẢI LẠI PROFILE' để thử lại.")
+            if is_manual:
+                messagebox.showerror("Lỗi", "Không thể kết nối tới Gemlogin API cục bộ trên cổng 1010. Vui lòng mở phần mềm Gemlogin và thử lại.")
             return
             
         self.log(f"Tải thành công {len(self.profiles)} profile.")

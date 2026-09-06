@@ -63,13 +63,16 @@ def is_gemlogin_running():
         return False
 
 def is_gemlogin_api_ready():
-    """Kiểm tra API cục bộ của Gemlogin (127.0.0.1:1010) đã sẵn sàng nhận kết nối chưa"""
+    """Kiểm tra API cục bộ của Gemlogin (127.0.0.1:1010) đã sẵn sàng nhận kết nối và trả về dữ liệu hợp lệ chưa"""
     try:
         req = urllib.request.Request(f"{GEMLOGIN_API}/api/profiles?per_page=1", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            return resp.status == 200
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            if resp.status == 200:
+                body = json.loads(resp.read().decode('utf-8'))
+                return body.get('success') is True
     except Exception:
         return False
+    return False
 
 def ensure_gemlogin_running(logger_callback=None):
     """
@@ -112,12 +115,13 @@ def ensure_gemlogin_running(logger_callback=None):
 
     # 3. Đợi Gemlogin và API cục bộ (cổng 1010) khởi động hoàn tất
     _log("⏳ Đang đợi Gemlogin khởi động và kích hoạt API cục bộ (127.0.0.1:1010)...")
-    max_wait = 30  # tối đa 30 giây
+    max_wait = 45  # tối đa 45 giây cho các máy khởi động chậm
     start_time = time.time()
     while time.time() - start_time < max_wait:
         if is_gemlogin_api_ready():
             _log("✅ Gemlogin đã khởi động và API (cổng 1010) đã sẵn sàng!")
-            time.sleep(1)
+            # Nghỉ thêm 2 giây để SQLite và giao diện Gemlogin ổn định hoàn toàn
+            time.sleep(2)
             return True, "Gemlogin đã sẵn sàng."
         time.sleep(1.5)
 
@@ -585,34 +589,26 @@ def get_running_profiles():
         print("Falling back to assuming all profiles started by this script should be closed.")
     return running_ids
 
-def api_get_profiles():
+def api_get_profiles(retries=3, delay=1.5, logger_callback=None):
     """
-    Fetches ALL profiles from Gemlogin local API across all groups with pagination.
+    Fetches ALL profiles from Gemlogin local API with pagination and automatic retries.
     """
-    all_profiles = []
-    seen_ids = set()
-    
-    # 1. Lấy danh sách tất cả group
-    group_ids = [None]  # None = profiles không có group (noGroup)
-    try:
-        req = urllib.request.Request(f"{GEMLOGIN_API}/api/groups")
-        with urllib.request.urlopen(req, timeout=10) as response:
-            res = json.loads(response.read().decode('utf-8'))
-            if res.get('success'):
-                for g in res.get('data', []):
-                    group_ids.append(g['id'])
-    except Exception as e:
-        print(f"Warning: Không thể lấy danh sách group: {e}")
-    
-    # 2. Lấy profiles từ mỗi group (có phân trang)
-    for gid in group_ids:
-        page = 1
-        while True:
-            try:
+    def _log(msg):
+        if logger_callback:
+            logger_callback(msg)
+        else:
+            print(msg)
+
+    for attempt in range(1, retries + 1):
+        all_profiles = []
+        seen_ids = set()
+
+        # Cách 1: Gọi trực tiếp /api/profiles với phân trang (Gemlogin trả về profiles của tất cả groups)
+        try:
+            page = 1
+            while True:
                 url = f"{GEMLOGIN_API}/api/profiles?per_page=500&page={page}"
-                if gid is not None:
-                    url += f"&group_id={gid}"
-                req = urllib.request.Request(url)
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=10) as response:
                     res = json.loads(response.read().decode('utf-8'))
                     if not res.get('success'):
@@ -625,19 +621,59 @@ def api_get_profiles():
                         if pid not in seen_ids:
                             seen_ids.add(pid)
                             all_profiles.append(p)
-                    # Nếu trả về ít hơn per_page thì đã hết trang
                     if len(data) < 500:
                         break
                     page += 1
-            except Exception as e:
-                group_label = f"group {gid}" if gid else "noGroup"
-                print(f"Error fetching profiles ({group_label}, page {page}): {e}")
-                break
-    
+        except Exception as e:
+            if attempt < retries:
+                _log(f"⏳ Đang kết nối lại Gemlogin API (lần {attempt}/{retries})...")
+
+        if all_profiles:
+            return all_profiles
+
+        # Cách 2: Nếu cách 1 chưa có dữ liệu, thử quét theo từng group (dự phòng)
+        try:
+            group_ids = [None]
+            req = urllib.request.Request(f"{GEMLOGIN_API}/api/groups", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                res = json.loads(response.read().decode('utf-8'))
+                if res.get('success'):
+                    for g in res.get('data', []):
+                        group_ids.append(g['id'])
+            
+            for gid in group_ids:
+                page = 1
+                while True:
+                    url = f"{GEMLOGIN_API}/api/profiles?per_page=500&page={page}"
+                    if gid is not None:
+                        url += f"&group_id={gid}"
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=10) as response:
+                        res = json.loads(response.read().decode('utf-8'))
+                        if not res.get('success'):
+                            break
+                        data = res.get('data', [])
+                        if not data:
+                            break
+                        for p in data:
+                            pid = p.get('id')
+                            if pid not in seen_ids:
+                                seen_ids.add(pid)
+                                all_profiles.append(p)
+                        if len(data) < 500:
+                            break
+                        page += 1
+        except Exception:
+            pass
+
+        if all_profiles:
+            return all_profiles
+
+        if attempt < retries:
+            time.sleep(delay)
+
     if not all_profiles:
-        print(f"Error: Không tìm thấy profile nào từ Gemlogin API tại {GEMLOGIN_API}")
-        print("Vui lòng đảm bảo phần mềm Gemlogin đang chạy.")
-    
+        _log(f"⚠️ Không tìm thấy profile nào từ Gemlogin API tại {GEMLOGIN_API}")
     return all_profiles
 
 def api_start_profile(profile_id):
