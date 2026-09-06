@@ -1155,62 +1155,142 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
         
         click_script = """
         (() => {
-            const inputs = Array.from(document.querySelectorAll('input'));
-            const userInput = inputs.find(i => i.type !== 'password' && i.type !== 'hidden');
-            const passInput = inputs.find(i => i.type === 'password');
-            
+            // 1. Tìm ô Username
+            let userInput = document.querySelector('input[name="loginKey"]')
+                || document.querySelector('input[autocomplete="username"]')
+                || document.querySelector('input[name="username"]')
+                || document.querySelector('input[name="email"]')
+                || document.querySelector('input[type="text"]')
+                || document.querySelector('input[type="tel"]')
+                || document.querySelector('input[type="email"]');
+
+            if (!userInput) {
+                const textInputs = Array.from(document.querySelectorAll('input')).filter(i => 
+                    i.type !== 'password' && i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.type !== 'submit' && i.type !== 'button'
+                );
+                if (textInputs.length > 0) userInput = textInputs[0];
+            }
+
+            // 2. Tìm ô Password
+            let passInput = document.querySelector('input[type="password"]')
+                || document.querySelector('input[name="password"]')
+                || document.querySelector('input[autocomplete*="password"]');
+
+            if (!passInput) {
+                const pwInputs = Array.from(document.querySelectorAll('input')).filter(i => i.type === 'password');
+                if (pwInputs.length > 0) passInput = pwInputs[0];
+            }
+
             const uVal = userInput ? (userInput.value || '').trim() : '';
-            const pVal = passInput ? (passInput.value || '') : '';
-            
-            // Chỉ coi là đã lưu sẵn nếu CẢ 2 ô username và password đều có dữ liệu
-            const hasSaved = Boolean(uVal.length > 0 && pVal.length > 0);
-            
+            const pVal = passInput ? (passInput.value || '').trim() : '';
+
+            // Kiểm tra trạng thái autofill của trình duyệt (Chrome áp dụng pseudo-class này khi autofill)
+            let uAutofill = false;
+            let pAutofill = false;
+            try {
+                if (userInput && userInput.matches) {
+                    uAutofill = userInput.matches(':-webkit-autofill') || userInput.matches(':autofill');
+                }
+                if (passInput && passInput.matches) {
+                    pAutofill = passInput.matches(':-webkit-autofill') || passInput.matches(':autofill');
+                }
+            } catch(e) {}
+
+            let anyAutofill = false;
+            try {
+                anyAutofill = document.querySelectorAll('input:-webkit-autofill, input:autofill').length > 0;
+            } catch(e) {}
+
+            // Trình duyệt được coi là có lưu sẵn tài khoản nếu:
+            // - Username có giá trị thực (uVal.length > 0) hoặc được autofill
+            // - HOẶC có bất kỳ ô input nào mang trạng thái :-webkit-autofill
+            // VÀ ô password tồn tại trên form
+            const hasSaved = Boolean(
+                (uVal.length > 0 || uAutofill || anyAutofill) && 
+                (passInput || pAutofill || pVal.length > 0)
+            );
+
             if (!hasSaved) {
                 return {
                     hasSaved: false,
                     user: uVal,
-                    hasPass: Boolean(pVal.length > 0)
+                    btnFound: false
                 };
             }
-            
-            // Kích hoạt event nếu đã có giá trị từ browser password manager
-            userInput.dispatchEvent(new Event('input', { bubbles: true }));
-            userInput.dispatchEvent(new Event('change', { bubbles: true }));
-            passInput.dispatchEvent(new Event('input', { bubbles: true }));
-            passInput.dispatchEvent(new Event('change', { bubbles: true }));
-            
-            // Tìm nút LOG IN chính
-            const allElements = Array.from(document.querySelectorAll('button, input[type="submit"], div[role="button"], a'));
+
+            // Kích hoạt event cho React nếu đã có giá trị
+            if (userInput && uVal) {
+                try {
+                    userInput.focus();
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    if (setter) setter.call(userInput, uVal);
+                    userInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    userInput.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch(e) {}
+            }
+            if (passInput) {
+                try {
+                    passInput.focus();
+                    passInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    passInput.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch(e) {}
+            }
+
+            // 3. Tìm nút LOG IN chính
             let targetBtn = null;
-            
+
+            // Cách 1: Tìm theo text chuẩn (Log In / Đăng nhập)
+            const allElements = Array.from(document.querySelectorAll('button, input[type="submit"], div[role="button"], a'));
             for (const el of allElements) {
-                if (el.closest('footer') || el.closest('.footer')) continue;
+                if (el.closest('header') || el.closest('footer')) continue;
                 const t = (el.innerText || el.textContent || el.value || '').trim().toLowerCase();
-                if (t === 'login' || t === 'log in' || t === 'đăng nhập') {
-                    if (!t.includes('qr') && !t.includes('facebook') && !t.includes('google')) {
+                if (t === 'login' || t === 'log in' || t === 'đăng nhập' || t === 'sign in' || t === 'masuk') {
+                    if (!t.includes('qr') && !t.includes('facebook') && !t.includes('google') && !t.includes('apple') && !t.includes('sms')) {
                         targetBtn = el;
                         break;
                     }
                 }
             }
-            
+
+            // Cách 2: Button bên trong form
             if (!targetBtn) {
-                const formBtn = document.querySelector('form button, button[type="submit"]');
-                if (formBtn) {
-                    const t = (formBtn.innerText || formBtn.textContent || '').trim().toLowerCase();
-                    if (!t.includes('qr') && !t.includes('facebook') && !t.includes('google')) {
-                        targetBtn = formBtn;
+                const formBtns = Array.from(document.querySelectorAll('form button, form input[type="submit"]'));
+                for (const el of formBtns) {
+                    const t = (el.innerText || el.textContent || el.value || '').trim().toLowerCase();
+                    if (!t.includes('qr') && !t.includes('facebook') && !t.includes('google') && !t.includes('apple') && !t.includes('sms')) {
+                        targetBtn = el;
+                        break;
                     }
                 }
             }
-            
+
+            // Cách 3: Button submit nổi bật
+            if (!targetBtn) {
+                const buttons = Array.from(document.querySelectorAll('button'));
+                for (const b of buttons) {
+                    const rect = b.getBoundingClientRect();
+                    if (rect.width > 120 && rect.height > 25 && rect.top > 100) {
+                        const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+                        if (!t.includes('qr') && !t.includes('facebook') && !t.includes('google')) {
+                            targetBtn = b;
+                            break;
+                        }
+                    }
+                }
+            }
+
             if (targetBtn) {
+                try {
+                    targetBtn.removeAttribute('disabled');
+                    targetBtn.disabled = false;
+                } catch(e) {}
+
                 targetBtn.scrollIntoView({block: 'center'});
                 const rect = targetBtn.getBoundingClientRect();
-                
-                // Kích hoạt DOM click
+
+                // DOM click
                 try { targetBtn.click(); } catch(e) {}
-                
+
                 return {
                     hasSaved: true,
                     btnFound: true,
@@ -1219,7 +1299,7 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
                     user: uVal
                 };
             }
-            
+
             return {
                 hasSaved: true,
                 btnFound: false,
@@ -1229,7 +1309,7 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
         """
         
         coords = {}
-        for attempt in range(4):
+        for attempt in range(5):
             ws.send(json.dumps({'id': 350 + attempt, 'method': 'Runtime.evaluate', 'params': {'expression': click_script, 'returnByValue': True}}))
             raw = ws.recv()
             coords = json.loads(raw).get('result', {}).get('result', {}).get('value', {})
@@ -1241,6 +1321,8 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
             ws.close()
             return False, "Không có tài khoản lưu sẵn (Username/Password trống)", None
             
+        user_label = coords.get('user') or ''
+        
         if coords.get('btnFound'):
             lx, ly = coords['x'], coords['y']
             
@@ -1253,12 +1335,15 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph"):
             ws.send(json.dumps({'id': 362, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseReleased', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
             ws.recv()
             
-            user_label = coords.get('user') or ''
-            ws.close()
-            return True, f"Đã có sẵn tài khoản '{user_label}' & đã ấn nút LOG IN", user_label
-            
+        # Gửi thêm phím Enter vào form phòng trường hợp web yêu cầu submit form
+        time.sleep(0.3)
+        ws.send(json.dumps({'id': 363, 'method': 'Input.dispatchKeyEvent', 'params': {'type': 'rawKeyDown', 'key': 'Enter', 'code': 'Enter', 'windowsVirtualKeyCode': 13}}))
+        ws.recv()
+        ws.send(json.dumps({'id': 364, 'method': 'Input.dispatchKeyEvent', 'params': {'type': 'keyUp', 'key': 'Enter', 'code': 'Enter', 'windowsVirtualKeyCode': 13}}))
+        ws.recv()
+        
         ws.close()
-        return False, "Có tài khoản lưu sẵn nhưng không tìm thấy nút LOG IN", coords.get('user')
+        return True, f"Đã có sẵn tài khoản '{user_label}' & đã ấn nút LOG IN", user_label
     except Exception as e:
         return False, f"Lỗi khi kiểm tra tài khoản lưu sẵn: {e}", None
 

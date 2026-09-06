@@ -1687,7 +1687,7 @@ class GemloginCookieGUI:
                     ws_nav.close()
                 except Exception:
                     pass
-                time.sleep(2.5)
+                time.sleep(3.0)
                 
                 res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain)
                 ok_saved = res_saved[0] if isinstance(res_saved, (tuple, list)) else bool(res_saved)
@@ -1697,8 +1697,8 @@ class GemloginCookieGUI:
                 self.log(f"👉 [{p_id}] {p_name}: {msg_saved}")
                 
                 if ok_saved:
-                    # Chờ kiểm tra kết quả đăng nhập (tối đa 8 giây)
-                    for _ in range(4):
+                    # Chờ kiểm tra kết quả đăng nhập (tối đa 10 giây)
+                    for _ in range(5):
                         if self.stop_requested:
                             break
                         time.sleep(2)
