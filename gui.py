@@ -1077,31 +1077,67 @@ class GemloginCookieGUI:
         self.stat_running_lbl.config(text=f"Đang chạy sẵn trên máy: {running}")
         
     def load_profiles(self, is_manual=False):
-        # Clear existing profile list UI
+        # Đổi trạng thái nút làm mới sang đang tải
+        self.refresh_btn.config(state=tk.DISABLED, text="⏳ ĐANG TẢI...")
+        
+        # Xóa danh sách profile cũ trên giao diện
         for row in self.profile_rows.values():
             row.frame.destroy()
         self.profile_rows.clear()
-        
-        # 1. Tự động kiểm tra Gemlogin đã chạy chưa (chưa chạy thì tự mở, chạy rồi thì bỏ qua)
-        extractor.ensure_gemlogin_running(
-            logger_callback=lambda m: (self.log(m), self.write_log_to_widget(m), self.root.update_idletasks())
-        )
-        
-        self.log("Đang tải danh sách profile từ API cục bộ Gemlogin (127.0.0.1:1010)...")
-        
-        # Get groups from API (thử lại tối đa 3 lần)
-        self.groups = []
-        for _ in range(3):
+        self.profiles = []
+        self.update_stats()
+
+        def _worker():
             try:
-                import urllib.request
-                req = urllib.request.Request(f"{extractor.GEMLOGIN_API}/api/groups", headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    res = json.loads(response.read().decode('utf-8'))
-                    if res.get('success'):
-                        self.groups = res.get('data', [])
-                        break
-            except Exception:
-                time.sleep(1)
+                # 1. Tự động kiểm tra Gemlogin đã chạy chưa (chưa chạy thì tự mở, chạy rồi thì bỏ qua)
+                extractor.ensure_gemlogin_running(logger_callback=self.log)
+                
+                self.log("Đang tải danh sách profile từ API cục bộ Gemlogin (127.0.0.1:1010)...")
+                
+                # Get groups from API (thử lại tối đa 3 lần)
+                groups = []
+                for _ in range(3):
+                    try:
+                        import urllib.request
+                        req = urllib.request.Request(f"{extractor.GEMLOGIN_API}/api/groups", headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req, timeout=5) as response:
+                            res = json.loads(response.read().decode('utf-8'))
+                            if res.get('success'):
+                                groups = res.get('data', [])
+                                break
+                    except Exception:
+                        time.sleep(1)
+                
+                # Get profiles from API với tự động retry (4 lần, cách nhau 2 giây)
+                profiles = extractor.api_get_profiles(
+                    retries=4, 
+                    delay=2.0, 
+                    logger_callback=self.log
+                )
+                
+                running_ids = set()
+                if profiles:
+                    self.log(f"Tải thành công {len(profiles)} profile.")
+                    self.log("Đang kiểm tra các profile đang mở sẵn trên máy...")
+                    running_ids = extractor.get_running_profiles()
+                    self.log(f"Phát hiện {len(running_ids)} profile đang mở sẵn.")
+                else:
+                    self.log("⚠️ Không thể kết nối tới Gemlogin API cục bộ trên cổng 1010.")
+                    self.log("💡 Vui lòng đảm bảo phần mềm Gemlogin đang mở và bấm nút '🔄 TẢI LẠI PROFILE' để thử lại.")
+                
+                # Cập nhật kết quả lên giao diện chính
+                self.root.after(0, lambda: self._on_profiles_loaded(profiles, groups, running_ids, is_manual))
+            except Exception as e:
+                self.log(f"❌ Lỗi nạp profile: {e}")
+                self.root.after(0, lambda: self._on_profiles_loaded([], [], set(), is_manual))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_profiles_loaded(self, profiles, groups, running_ids, is_manual):
+        self.refresh_btn.config(state=tk.NORMAL, text="🔄 TẢI LẠI PROFILE")
+        self.groups = groups
+        self.profiles = profiles
+        self.running_ids_before = running_ids
         
         # Update group dropdown
         menu = self.group_menu["menu"]
@@ -1112,28 +1148,15 @@ class GemloginCookieGUI:
         for opt in group_options:
             menu.add_command(label=opt, command=lambda v=opt: self.group_var.set(v))
         self.group_var.set("Tất cả nhóm")
-        self.log(f"Tìm thấy {len(self.groups)} nhóm: {', '.join(g['name'] for g in self.groups) if self.groups else '(không có)'}")
+        if self.groups:
+            self.log(f"Tìm thấy {len(self.groups)} nhóm: {', '.join(g['name'] for g in self.groups)}")
         
-        # Get profiles from API với tự động retry (4 lần, cách nhau 2 giây)
-        self.profiles = extractor.api_get_profiles(
-            retries=4, 
-            delay=2.0, 
-            logger_callback=lambda m: (self.log(m), self.write_log_to_widget(m), self.root.update_idletasks())
-        )
         if not self.profiles:
-            self.log("⚠️ Không thể kết nối tới Gemlogin API cục bộ trên cổng 1010.")
-            self.log("💡 Vui lòng đảm bảo phần mềm Gemlogin đang mở và bấm nút '🔄 TẢI LẠI PROFILE' để thử lại.")
             if is_manual:
                 messagebox.showerror("Lỗi", "Không thể kết nối tới Gemlogin API cục bộ trên cổng 1010. Vui lòng mở phần mềm Gemlogin và thử lại.")
+            self.update_stats()
             return
             
-        self.log(f"Tải thành công {len(self.profiles)} profile.")
-        
-        # Get running profiles
-        self.log("Đang kiểm tra các profile đang mở sẵn trên máy...")
-        self.running_ids_before = extractor.get_running_profiles()
-        self.log(f"Phát hiện {len(self.running_ids_before)} profile đang mở sẵn.")
-        
         # Create row widgets in UI
         for p in self.profiles:
             p_id = p['id']

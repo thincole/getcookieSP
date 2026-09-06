@@ -18,7 +18,7 @@ set "PY="
 python --version >nul 2>&1
 if not errorlevel 1 (
     set "PY=python"
-    set "PW=pythonw"
+    for /f "delims=" %%i in ('python -c "import sys, os; p = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe'); print(p if os.path.exists(p) else 'pythonw')"') do set "PW=%%i"
     goto :FOUND
 )
 
@@ -99,25 +99,36 @@ if errorlevel 1 (
 :: Kiem tra phan mem Gemlogin
 echo [*] Kiem tra phan mem Gemlogin...
 tasklist /FI "IMAGENAME eq Gemlogin.exe" 2>nul | findstr /i "Gemlogin.exe" >nul
-if errorlevel 1 (
-    echo [!] Gemlogin chua chay. Dang tu dong khoi dong Gemlogin...
-    if exist "C:\Program Files\Gemlogin\Gemlogin.exe" (
-        start "" "C:\Program Files\Gemlogin\Gemlogin.exe"
-    ) else if exist "%LOCALAPPDATA%\Programs\Gemlogin\Gemlogin.exe" (
-        start "" "%LOCALAPPDATA%\Programs\Gemlogin\Gemlogin.exe"
-    ) else if exist "%PUBLIC%\Desktop\Gemlogin.lnk" (
-        start "" "%PUBLIC%\Desktop\Gemlogin.lnk"
-    )
-    echo [*] Cho Gemlogin khoi dong ban dau (3 giay)...
-    timeout /t 3 >nul
-) else (
-    echo [OK] Gemlogin da dang chay san.
+if not errorlevel 1 goto :GEMLOGIN_RUNNING
+
+echo [!] Gemlogin chua chay. Dang tu dong khoi dong Gemlogin...
+if exist "C:\Program Files\Gemlogin\Gemlogin.exe" (
+    start "" "C:\Program Files\Gemlogin\Gemlogin.exe"
+    goto :GEMLOGIN_STARTED
 )
+if exist "%LOCALAPPDATA%\Programs\Gemlogin\Gemlogin.exe" (
+    start "" "%LOCALAPPDATA%\Programs\Gemlogin\Gemlogin.exe"
+    goto :GEMLOGIN_STARTED
+)
+if exist "%PUBLIC%\Desktop\Gemlogin.lnk" (
+    start "" "%PUBLIC%\Desktop\Gemlogin.lnk"
+    goto :GEMLOGIN_STARTED
+)
+
+:GEMLOGIN_STARTED
+echo [*] Cho Gemlogin khoi dong ban dau 3 giay...
+ping 127.0.0.1 -n 4 >nul
+goto :START_GUI
+
+:GEMLOGIN_RUNNING
+echo [OK] Gemlogin da dang chay san.
+
+:START_GUI
 echo.
 
 :: Chay GUI
 echo [*] Dang mo giao dien...
-start "" "%PW%" "%~dp0gui.py"
+start "" "%PW%" gui.py
 echo [OK] Da khoi chay thanh cong!
-timeout /t 3 >nul
+ping 127.0.0.1 -n 2 >nul
 exit
