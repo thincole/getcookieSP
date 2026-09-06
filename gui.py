@@ -194,7 +194,8 @@ class GemloginCookieGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("GemLogin Cookie Extractor - Shopee Edition")
-        self.root.geometry("1100x750")
+        self.root.geometry("1200x820")
+        self.root.minsize(1050, 680)
         self.root.configure(bg=BG_DARK)
         
         self.profiles = []
@@ -273,11 +274,26 @@ class GemloginCookieGUI:
         self.container = tk.Frame(self.root, bg=BG_DARK)
         self.container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        # --- LEFT PANEL: Control & Configuration ---
-        self.left_panel = tk.Frame(self.container, bg=BG_CARD, width=320, padx=15, pady=15)
-        self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-        self.left_panel.pack_propagate(False)
+        # --- LEFT PANEL: Scrollable Control & Configuration ---
+        self.left_container = tk.Frame(self.container, bg=BG_CARD, width=340)
+        self.left_container.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        self.left_container.pack_propagate(False)
+
+        self.left_canvas = tk.Canvas(self.left_container, bg=BG_CARD, highlightthickness=0, borderwidth=0)
+        self.left_scrollbar = ttk.Scrollbar(self.left_container, orient="vertical", command=self.left_canvas.yview)
         
+        self.left_panel = tk.Frame(self.left_canvas, bg=BG_CARD, padx=8, pady=8)
+        self.left_panel_window = self.left_canvas.create_window((0, 0), window=self.left_panel, anchor="nw", width=320)
+        
+        self.left_canvas.configure(yscrollcommand=self.left_scrollbar.set)
+        self.left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        def _update_left_scrollregion(event=None):
+            self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+        self.left_panel.bind("<Configure>", _update_left_scrollregion)
+        self.left_canvas.bind('<Configure>', lambda event: self.left_canvas.itemconfig(self.left_panel_window, width=event.width))
+
         # 1. Config Section
         config_title = tk.Label(
             self.left_panel, 
@@ -286,22 +302,28 @@ class GemloginCookieGUI:
             bg=BG_CARD, 
             font=("Arial", 11, "bold")
         )
-        config_title.pack(anchor="w", pady=(0, 10))
+        config_title.pack(anchor="w", pady=(0, 6))
         
-        # Batch size
-        tk.Label(self.left_panel, text="Số luồng chạy đồng thời (Batch Size):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
-        self.batch_entry = tk.Entry(self.left_panel, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 10))
+        # Row 1: Batch Size & Delay
+        row_batch_delay = tk.Frame(self.left_panel, bg=BG_CARD)
+        row_batch_delay.pack(fill=tk.X, pady=(0, 5))
+        
+        b_box = tk.Frame(row_batch_delay, bg=BG_CARD)
+        b_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        tk.Label(b_box, text="Số luồng chạy:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        self.batch_entry = tk.Entry(b_box, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9), justify="center")
         self.batch_entry.insert(0, "5")
-        self.batch_entry.pack(fill=tk.X, pady=(2, 10), ipady=5)
+        self.batch_entry.pack(fill=tk.X, ipady=3)
         
-        # Delay size
-        tk.Label(self.left_panel, text="Độ trễ giữa các profile (Giây):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
-        self.delay_entry = tk.Entry(self.left_panel, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 10))
+        d_box = tk.Frame(row_batch_delay, bg=BG_CARD)
+        d_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        tk.Label(d_box, text="Độ trễ (giây):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        self.delay_entry = tk.Entry(d_box, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9), justify="center")
         self.delay_entry.insert(0, "1")
-        self.delay_entry.pack(fill=tk.X, pady=(2, 10), ipady=5)
+        self.delay_entry.pack(fill=tk.X, ipady=3)
         
         # Country Selection
-        tk.Label(self.left_panel, text="Quốc gia (Thị trường Shopee):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
+        tk.Label(self.left_panel, text="Quốc gia (Thị trường Shopee):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
         self.country_var = tk.StringVar(value="PH (Philippines)")
         self.country_options = [
             "Tất cả (All)",
@@ -318,42 +340,47 @@ class GemloginCookieGUI:
             highlightthickness=0, borderwidth=0, font=("Arial", 9)
         )
         self.country_menu["menu"].config(bg=BG_CARD, fg=TEXT_WHITE, activebackground=ACCENT_ORANGE, activeforeground=TEXT_WHITE, font=("Arial", 9))
-        self.country_menu.pack(fill=tk.X, pady=(2, 10))
+        self.country_menu.pack(fill=tk.X, pady=(1, 5))
         
-        # Mobile UA emulation toggle
+        # Checkboxes: Mobile UA & Clean Cookie
+        cb_frame = tk.Frame(self.left_panel, bg=BG_CARD)
+        cb_frame.pack(fill=tk.X, pady=(0, 5))
+        
         self.mobile_ua_var = tk.BooleanVar(value=False)
         self.mobile_ua_check = tk.Checkbutton(
-            self.left_panel,
-            text="📱 Giả lập Mobile UA (bypass anti-bot)",
+            cb_frame,
+            text="📱 Giả lập Mobile UA",
             variable=self.mobile_ua_var,
             bg=BG_CARD, fg=TEXT_WHITE, selectcolor="#2d2d2d",
             activebackground=BG_CARD, activeforeground=TEXT_WHITE,
-            font=("Arial", 9),
+            font=("Arial", 8),
             anchor="w"
         )
-        self.mobile_ua_check.pack(fill=tk.X, pady=(0, 4))
+        self.mobile_ua_check.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # Clean Cookie filter toggle (Chuẩn Tool MLS / PH3001)
         self.clean_cookie_var = tk.BooleanVar(value=True)
         self.clean_cookie_check = tk.Checkbutton(
-            self.left_panel,
-            text="✨ Lọc Cookie tinh gọn (Chuẩn MLS/PH3001)",
+            cb_frame,
+            text="✨ Cookie tinh gọn",
             variable=self.clean_cookie_var,
             bg=BG_CARD, fg=TEXT_WHITE, selectcolor="#2d2d2d",
             activebackground=BG_CARD, activeforeground=TEXT_WHITE,
-            font=("Arial", 9),
+            font=("Arial", 8),
             anchor="w"
         )
-        self.clean_cookie_check.pack(fill=tk.X, pady=(0, 10))
+        self.clean_cookie_check.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Clear site data var
+        self.clear_site_data_var = tk.BooleanVar(value=False)
         
         # Output File Path
-        tk.Label(self.left_panel, text="File xuất kết quả (TXT/CSV):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
+        tk.Label(self.left_panel, text="File xuất kết quả (TXT/CSV):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
         file_frame = tk.Frame(self.left_panel, bg=BG_CARD)
-        file_frame.pack(fill=tk.X, pady=(2, 8))
+        file_frame.pack(fill=tk.X, pady=(1, 5))
         
         self.output_entry = tk.Entry(file_frame, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9))
         self.output_entry.insert(0, "shopee_cookies.txt")
-        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
         
         browse_btn = tk.Button(
             file_frame, 
@@ -361,15 +388,15 @@ class GemloginCookieGUI:
             bg="#3d3d3d", 
             fg=TEXT_WHITE, 
             activebackground=BG_HOVER, 
-            activeforeground=TEXT_WHITE,
+            activeforeground=TEXT_WHITE, 
             borderwidth=0, 
-            padx=10, 
+            padx=8, 
             command=self.browse_output
         )
-        browse_btn.pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
+        browse_btn.pack(side=tk.RIGHT, padx=(4, 0), ipady=2)
         
         # Output TXT Format Selection
-        tk.Label(self.left_panel, text="Định dạng dòng xuất (TXT):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
+        tk.Label(self.left_panel, text="Định dạng dòng xuất (TXT):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
         self.export_format_var = tk.StringVar(value="Tên|Cookie")
         self.export_format_combo = ttk.Combobox(
             self.left_panel,
@@ -381,12 +408,12 @@ class GemloginCookieGUI:
             state="readonly",
             font=("Arial", 9)
         )
-        self.export_format_combo.pack(fill=tk.X, pady=(2, 10))
+        self.export_format_combo.pack(fill=tk.X, pady=(1, 5))
         
         # Extension Path Configuration
-        tk.Label(self.left_panel, text="Đường dẫn Extension Cookie:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
+        tk.Label(self.left_panel, text="Đường dẫn Extension Cookie:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
         ext_frame = tk.Frame(self.left_panel, bg=BG_CARD)
-        ext_frame.pack(fill=tk.X, pady=(2, 10))
+        ext_frame.pack(fill=tk.X, pady=(1, 5))
         
         self.ext_path_entry = tk.Entry(ext_frame, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9))
         default_ext = extractor.EXTENSION_PATH
@@ -396,7 +423,7 @@ class GemloginCookieGUI:
                     default_ext = candidate
                     break
         self.ext_path_entry.insert(0, default_ext)
-        self.ext_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        self.ext_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
         
         ext_browse_btn = tk.Button(
             ext_frame, 
@@ -409,15 +436,15 @@ class GemloginCookieGUI:
             padx=8, 
             command=self.browse_extension_path
         )
-        ext_browse_btn.pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
+        ext_browse_btn.pack(side=tk.RIGHT, padx=(4, 0), ipady=2)
         
         # Google Sheet Configuration
-        tk.Label(self.left_panel, text="Link Google Sheet:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
+        tk.Label(self.left_panel, text="Link Google Sheet:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
         sheet_frame = tk.Frame(self.left_panel, bg=BG_CARD)
-        sheet_frame.pack(fill=tk.X, pady=(2, 6))
+        sheet_frame.pack(fill=tk.X, pady=(1, 5))
         
         self.sheet_url_entry = tk.Entry(sheet_frame, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9))
-        self.sheet_url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        self.sheet_url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
         
         load_sheet_btn = tk.Button(
             sheet_frame, 
@@ -425,40 +452,42 @@ class GemloginCookieGUI:
             bg="#1e5f74", 
             fg=TEXT_WHITE, 
             activebackground="#133b5c", 
-            activeforeground=TEXT_WHITE,
+            activeforeground=TEXT_WHITE, 
             borderwidth=0, 
             padx=8, 
             command=self.load_google_sheet_accounts
         )
-        load_sheet_btn.pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
+        load_sheet_btn.pack(side=tk.RIGHT, padx=(4, 0), ipady=2)
         
-        # Column Setting: Cột User & Cột Profile
-        cols_frame = tk.Frame(self.left_panel, bg=BG_CARD)
-        cols_frame.pack(fill=tk.X, pady=(2, 6))
+        # Column Setting & Default Pass: User, Profile, Password in 1 compact row
+        acc_config_frame = tk.Frame(self.left_panel, bg=BG_CARD)
+        acc_config_frame.pack(fill=tk.X, pady=(1, 6))
         
-        user_col_box = tk.Frame(cols_frame, bg=BG_CARD)
-        user_col_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        tk.Label(user_col_box, text="Cột User:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
-        self.user_col_entry = tk.Entry(user_col_box, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9, "bold"), justify="center")
+        u_box = tk.Frame(acc_config_frame, bg=BG_CARD)
+        u_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        tk.Label(u_box, text="Cột User:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        self.user_col_entry = tk.Entry(u_box, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9, "bold"), justify="center")
         self.user_col_entry.insert(0, "E")
-        self.user_col_entry.pack(fill=tk.X, ipady=3)
+        self.user_col_entry.pack(fill=tk.X, ipady=2)
         
-        prof_col_box = tk.Frame(cols_frame, bg=BG_CARD)
-        prof_col_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
-        tk.Label(prof_col_box, text="Cột Profile:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
-        self.profile_col_entry = tk.Entry(prof_col_box, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9, "bold"), justify="center")
+        p_box = tk.Frame(acc_config_frame, bg=BG_CARD)
+        p_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 2))
+        tk.Label(p_box, text="Cột Profile:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        self.profile_col_entry = tk.Entry(p_box, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9, "bold"), justify="center")
         self.profile_col_entry.insert(0, "G")
-        self.profile_col_entry.pack(fill=tk.X, ipady=3)
+        self.profile_col_entry.pack(fill=tk.X, ipady=2)
         
-        tk.Label(self.left_panel, text="Mật khẩu mặc định (User/Pass):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 9)).pack(anchor="w")
-        self.default_pass_entry = tk.Entry(self.left_panel, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9))
+        pw_box = tk.Frame(acc_config_frame, bg=BG_CARD)
+        pw_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+        tk.Label(pw_box, text="Mật khẩu:", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        self.default_pass_entry = tk.Entry(pw_box, bg="#2d2d2d", fg=TEXT_WHITE, insertbackground=TEXT_WHITE, borderwidth=0, font=("Arial", 9), justify="center")
         self.default_pass_entry.insert(0, "Khoa01@c")
-        self.default_pass_entry.pack(fill=tk.X, pady=(2, 12), ipady=5)
+        self.default_pass_entry.pack(fill=tk.X, ipady=2)
         
         self.account_map = {}
         
         # Divider
-        tk.Frame(self.left_panel, bg="#2d2d2d", height=1).pack(fill=tk.X, pady=15)
+        tk.Frame(self.left_panel, bg="#2d2d2d", height=1).pack(fill=tk.X, pady=(6, 6))
         
         # 2. Control Buttons Section
         control_title = tk.Label(
@@ -468,7 +497,7 @@ class GemloginCookieGUI:
             bg=BG_CARD, 
             font=("Arial", 11, "bold")
         )
-        control_title.pack(anchor="w", pady=(0, 10))
+        control_title.pack(anchor="w", pady=(0, 6))
         
         self.start_btn = tk.Button(
             self.left_panel, 
@@ -477,12 +506,12 @@ class GemloginCookieGUI:
             fg=TEXT_WHITE, 
             activebackground="#d63d1e", 
             activeforeground=TEXT_WHITE,
-            font=("Arial", 10, "bold"),
+            font=("Arial", 9, "bold"),
             borderwidth=0, 
-            pady=10, 
+            pady=7, 
             command=self.start_extraction
         )
-        self.start_btn.pack(fill=tk.X, pady=5)
+        self.start_btn.pack(fill=tk.X, pady=2)
         
         self.stop_btn = tk.Button(
             self.left_panel, 
@@ -491,13 +520,13 @@ class GemloginCookieGUI:
             fg=TEXT_WHITE, 
             activebackground=BG_HOVER, 
             activeforeground=TEXT_WHITE,
-            font=("Arial", 10, "bold"),
+            font=("Arial", 9, "bold"),
             borderwidth=0, 
-            pady=10, 
+            pady=6, 
             state=tk.DISABLED,
             command=self.stop_extraction
         )
-        self.stop_btn.pack(fill=tk.X, pady=5)
+        self.stop_btn.pack(fill=tk.X, pady=2)
         
         self.refresh_btn = tk.Button(
             self.left_panel, 
@@ -505,13 +534,13 @@ class GemloginCookieGUI:
             bg="#2d2d2d", 
             fg=TEXT_WHITE, 
             activebackground=BG_HOVER, 
-            activeforeground=TEXT_WHITE,
+            activeforeground=TEXT_WHITE, 
             font=("Arial", 9),
             borderwidth=0, 
-            pady=8, 
+            pady=5, 
             command=lambda: self.load_profiles(is_manual=True)
         )
-        self.refresh_btn.pack(fill=tk.X, pady=(15, 5))
+        self.refresh_btn.pack(fill=tk.X, pady=2)
         
         self.install_ext_btn = tk.Button(
             self.left_panel, 
@@ -522,10 +551,10 @@ class GemloginCookieGUI:
             activeforeground=TEXT_WHITE,
             font=("Arial", 9, "bold"),
             borderwidth=0, 
-            pady=8, 
+            pady=6, 
             command=self.install_extension_to_selected
         )
-        self.install_ext_btn.pack(fill=tk.X, pady=5)
+        self.install_ext_btn.pack(fill=tk.X, pady=2)
         
         self.open_with_ext_btn = tk.Button(
             self.left_panel, 
@@ -536,10 +565,10 @@ class GemloginCookieGUI:
             activeforeground=TEXT_WHITE,
             font=("Arial", 9, "bold"),
             borderwidth=0, 
-            pady=8, 
+            pady=6, 
             command=self.open_selected_profiles_with_ext
         )
-        self.open_with_ext_btn.pack(fill=tk.X, pady=5)
+        self.open_with_ext_btn.pack(fill=tk.X, pady=2)
         
         self.clear_data_btn = tk.Button(
             self.left_panel, 
@@ -550,10 +579,10 @@ class GemloginCookieGUI:
             activeforeground=TEXT_WHITE,
             font=("Arial", 9, "bold"),
             borderwidth=0, 
-            pady=8, 
+            pady=6, 
             command=self.clear_site_data_for_selected
         )
-        self.clear_data_btn.pack(fill=tk.X, pady=5)
+        self.clear_data_btn.pack(fill=tk.X, pady=2)
         
         self.auto_fb_login_btn = tk.Button(
             self.left_panel, 
@@ -564,38 +593,38 @@ class GemloginCookieGUI:
             activeforeground=TEXT_WHITE,
             font=("Arial", 9, "bold"),
             borderwidth=0, 
-            pady=8, 
+            pady=6, 
             command=self.auto_login_fb_and_extract
         )
-        self.auto_fb_login_btn.pack(fill=tk.X, pady=5)
+        self.auto_fb_login_btn.pack(fill=tk.X, pady=2)
         
         # Divider
-        tk.Frame(self.left_panel, bg="#2d2d2d", height=1).pack(fill=tk.X, pady=15)
+        tk.Frame(self.left_panel, bg="#2d2d2d", height=1).pack(fill=tk.X, pady=(8, 6))
         
         # Stat Panel
         self.stat_frame = tk.Frame(self.left_panel, bg=BG_CARD)
-        self.stat_frame.pack(fill=tk.BOTH, expand=True)
+        self.stat_frame.pack(fill=tk.X, pady=(0, 5))
         
         self.stat_title = tk.Label(
             self.stat_frame, 
             text="THỐNG KÊ", 
             fg=ACCENT_ORANGE, 
             bg=BG_CARD, 
-            font=("Arial", 11, "bold")
+            font=("Arial", 10, "bold")
         )
         self.stat_title.pack(anchor="w")
         
-        self.stat_total_lbl = tk.Label(self.stat_frame, text="Tổng số profile: 0", fg=TEXT_WHITE, bg=BG_CARD, font=("Arial", 10), anchor="w")
-        self.stat_total_lbl.pack(fill=tk.X, pady=2)
+        self.stat_total_lbl = tk.Label(self.stat_frame, text="Tổng số profile: 0", fg=TEXT_WHITE, bg=BG_CARD, font=("Arial", 9), anchor="w")
+        self.stat_total_lbl.pack(fill=tk.X, pady=1)
         
-        self.stat_selected_lbl = tk.Label(self.stat_frame, text="Đã chọn: 0", fg=TEXT_WHITE, bg=BG_CARD, font=("Arial", 10), anchor="w")
-        self.stat_selected_lbl.pack(fill=tk.X, pady=2)
+        self.stat_selected_lbl = tk.Label(self.stat_frame, text="Đã chọn: 0", fg=TEXT_WHITE, bg=BG_CARD, font=("Arial", 9), anchor="w")
+        self.stat_selected_lbl.pack(fill=tk.X, pady=1)
         
-        self.stat_running_lbl = tk.Label(self.stat_frame, text="Đang chạy sẵn trên máy: 0", fg=TEXT_WHITE, bg=BG_CARD, font=("Arial", 10), anchor="w")
-        self.stat_running_lbl.pack(fill=tk.X, pady=2)
+        self.stat_running_lbl = tk.Label(self.stat_frame, text="Đang chạy sẵn trên máy: 0", fg=TEXT_WHITE, bg=BG_CARD, font=("Arial", 9), anchor="w")
+        self.stat_running_lbl.pack(fill=tk.X, pady=1)
         
-        self.progress_lbl = tk.Label(self.stat_frame, text="Tiến độ: 0 / 0", fg=TEXT_WHITE, bg=BG_CARD, font=("Arial", 10, "bold"), anchor="w")
-        self.progress_lbl.pack(fill=tk.X, pady=(15, 2))
+        self.progress_lbl = tk.Label(self.stat_frame, text="Tiến độ: 0 / 0", fg=TEXT_WHITE, bg=BG_CARD, font=("Arial", 9, "bold"), anchor="w")
+        self.progress_lbl.pack(fill=tk.X, pady=(6, 1))
         
         self.progress_bar = ttk.Progressbar(self.stat_frame, mode="determinate")
         self.progress_bar.pack(fill=tk.X, pady=2)
@@ -721,8 +750,12 @@ class GemloginCookieGUI:
         self.canvas.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
         
-        # Add mouse wheel support
-        self.canvas.bind_all("<MouseWheel>", self.on_mousewheel)
+        # Add mouse wheel support for both left and right panels
+        self.left_canvas.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self.on_left_mousewheel))
+        self.left_panel.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self.on_left_mousewheel))
+        self.canvas.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self.on_mousewheel))
+        self.scrollable_frame.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self.on_mousewheel))
+        self.root.bind_all("<MouseWheel>", self.on_mousewheel)
         
         # Log frame at the bottom of the right column
         self.log_frame = tk.LabelFrame(
@@ -755,6 +788,9 @@ class GemloginCookieGUI:
         
     def on_mousewheel(self, event):
         self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+    def on_left_mousewheel(self, event):
+        self.left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         
     def browse_output(self):
         filename = filedialog.asksaveasfilename(
