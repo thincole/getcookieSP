@@ -7,6 +7,8 @@ import os
 import csv
 import json
 import sys
+import subprocess
+import urllib.request
 from datetime import datetime
 
 # Import local modules
@@ -31,8 +33,25 @@ STATUS_WARNING = "#ff9800"
 STATUS_SUCCESS = "#4caf50"
 STATUS_ERROR = "#f44336"
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-VERSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "version.txt")
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(ROOT_DIR, "config.json")
+VERSION_FILE = os.path.join(ROOT_DIR, "version.txt")
+GITHUB_REPO_URL = "https://github.com/thincole/getcookieSP"
+GITHUB_RAW_VERSION_URL = "https://raw.githubusercontent.com/thincole/getcookieSP/main/version.txt"
+
+def parse_version_tuple(v_str):
+    if not v_str:
+        return (0, 0, 0)
+    v_str = str(v_str).strip().lstrip('v').split('-')[0]
+    parts = []
+    for p in v_str.split('.'):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
 
 def get_current_version():
     if os.path.exists(VERSION_FILE):
@@ -43,7 +62,39 @@ def get_current_version():
                     return v
         except Exception:
             pass
-    return "1.0.1"
+    return "1.0.2"
+
+def check_remote_version():
+    """Lấy phiên bản mới nhất từ GitHub repository"""
+    # 1. Thử tải qua raw.githubusercontent.com (nhanh & không bị rate-limit)
+    try:
+        req = urllib.request.Request(
+            GITHUB_RAW_VERSION_URL,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            v = resp.read().decode('utf-8', errors='ignore').strip()
+            if v:
+                return v
+    except Exception:
+        pass
+        
+    # 2. Thử git ls-remote nếu có kết nối git
+    try:
+        res = subprocess.run(f"git ls-remote --tags {GITHUB_REPO_URL}", shell=True, capture_output=True, text=True, timeout=5)
+        if res.returncode == 0 and res.stdout.strip():
+            tags = []
+            for line in res.stdout.splitlines():
+                if 'refs/tags/' in line:
+                    t = line.split('refs/tags/')[-1].replace('^{}', '').strip().lstrip('v')
+                    tags.append(t)
+            if tags:
+                tags.sort(key=parse_version_tuple)
+                return tags[-1]
+    except Exception:
+        pass
+        
+    return None
 
 class ProfileRow:
     def __init__(self, parent, profile, on_change_callback):
@@ -170,6 +221,9 @@ class GemloginCookieGUI:
         # Save config when closing window
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
+        # Check for updates in background (sau khi UI đã hiển thị 1s)
+        self.root.after(1000, lambda: threading.Thread(target=self.check_for_updates_background, daemon=True).start())
+        
     def setup_ui(self):
         # Top banner with Shopee branding
         self.banner = tk.Frame(self.root, bg=ACCENT_ORANGE, height=60)
@@ -185,15 +239,35 @@ class GemloginCookieGUI:
         )
         banner_title.pack(side=tk.LEFT, padx=20, pady=15)
         
+        # Right container for version and update button
+        self.right_banner_frame = tk.Frame(self.banner, bg=ACCENT_ORANGE)
+        self.right_banner_frame.pack(side=tk.RIGHT, padx=20, pady=12)
+        
         cur_version = get_current_version()
-        banner_subtitle = tk.Label(
-            self.banner, 
-            text=f"Shopee Auto-Extractor Edition v{cur_version}", 
+        self.version_lbl = tk.Label(
+            self.right_banner_frame, 
+            text=f"Phiên bản: v{cur_version}", 
             fg="#ffd2cc", 
             bg=ACCENT_ORANGE, 
-            font=("Arial", 10, "italic")
+            font=("Arial", 10, "bold")
         )
-        banner_subtitle.pack(side=tk.RIGHT, padx=20, pady=20)
+        self.version_lbl.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.update_btn = tk.Button(
+            self.right_banner_frame,
+            text="🔄 Kiểm tra Cập nhật",
+            bg="#b73215",
+            fg=TEXT_WHITE,
+            activebackground="#962810",
+            activeforeground=TEXT_WHITE,
+            font=("Arial", 9, "bold"),
+            borderwidth=0,
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            command=self.check_for_updates_interactive
+        )
+        self.update_btn.pack(side=tk.LEFT)
         
         # Main container with two columns
         self.container = tk.Frame(self.root, bg=BG_DARK)
@@ -787,6 +861,111 @@ class GemloginCookieGUI:
         """Lưu cấu hình khi đóng phần mềm"""
         self.save_config()
         self.root.destroy()
+
+    def check_for_updates_background(self):
+        """Kiểm tra phiên bản mới từ GitHub trong tiến trình ngầm khi mở app"""
+        try:
+            remote_ver = check_remote_version()
+            if not remote_ver:
+                return
+            cur_ver = get_current_version()
+            if parse_version_tuple(remote_ver) > parse_version_tuple(cur_ver):
+                self.new_version_available = remote_ver
+                self.ui_update_queue.put(('update_available', remote_ver))
+        except Exception:
+            pass
+
+    def check_for_updates_interactive(self):
+        """Bấm nút Kiểm tra Cập nhật / Tải bản cập nhật mới"""
+        cur_ver = get_current_version()
+        remote_ver = getattr(self, 'new_version_available', None)
+        
+        if not remote_ver:
+            self.update_btn.config(text="⏳ Đang kiểm tra...")
+            self.root.update_idletasks()
+            remote_ver = check_remote_version()
+            self.update_btn.config(text="🔄 Kiểm tra Cập nhật")
+            
+        if not remote_ver:
+            messagebox.showinfo(
+                "Kiểm tra cập nhật",
+                "Không thể kết nối đến GitHub để kiểm tra phiên bản mới.\nVui lòng kiểm tra lại kết nối mạng."
+            )
+            return
+            
+        if parse_version_tuple(remote_ver) > parse_version_tuple(cur_ver):
+            self.new_version_available = remote_ver
+            self.update_btn.config(
+                text=f"🔥 Có bản mới v{remote_ver}! Bấm Cập nhật",
+                bg="#28a745",
+                activebackground="#218838"
+            )
+            confirm = messagebox.askyesno(
+                "Phát hiện bản cập nhật mới",
+                f"🎉 Đã có phiên bản mới: v{remote_ver} trên GitHub!\n"
+                f"Phiên bản hiện tại của bạn: v{cur_ver}\n\n"
+                f"Bạn có muốn tự động tải và cập nhật lên v{remote_ver} ngay bây giờ không?"
+            )
+            if confirm:
+                self.perform_auto_update(remote_ver)
+        else:
+            messagebox.showinfo(
+                "Kiểm tra cập nhật",
+                f"Bạn đang sử dụng phiên bản mới nhất (v{cur_ver})!\nKhông có bản cập nhật nào mới hơn trên GitHub."
+            )
+
+    def perform_auto_update(self, new_ver):
+        """Tự động kéo mã nguồn mới nhất từ GitHub và khởi động lại app"""
+        self.save_config()
+        self.log(f"🚀 Đang tiến hành cập nhật lên phiên bản v{new_ver} từ GitHub...")
+        
+        # 1. Sao lưu nội dung config.json hiện tại của người dùng
+        cfg_backup = None
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    cfg_backup = f.read()
+            except Exception:
+                pass
+                
+        # 2. Chạy lệnh git fetch và pull
+        try:
+            subprocess.run("git fetch origin main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
+            pull_res = subprocess.run("git pull origin main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
+            
+            if pull_res.returncode != 0:
+                # Nếu có xung đột working directory, thử reset về origin/main
+                subprocess.run("git reset --hard origin/main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
+                
+            # Khôi phục lại config.json người dùng đã cài đặt
+            if cfg_backup and os.path.exists(CONFIG_PATH):
+                try:
+                    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                        f.write(cfg_backup)
+                except Exception:
+                    pass
+                    
+            self.log(f"✅ Đã cập nhật thành công lên phiên bản v{new_ver}!")
+            restart = messagebox.askyesno(
+                "Cập nhật thành công",
+                f"Đã nâng cấp thành công lên phiên bản v{new_ver}!\n\n"
+                f"Bạn có muốn khởi động lại phần mềm ngay bây giờ để áp dụng phiên bản mới không?"
+            )
+            if restart:
+                python_exe = sys.executable
+                subprocess.Popen([python_exe, os.path.join(ROOT_DIR, "gui.py")])
+                self.root.destroy()
+            else:
+                self.version_lbl.config(text=f"Phiên bản: v{new_ver}")
+                self.update_btn.config(text="🔄 Kiểm tra Cập nhật", bg="#b73215", activebackground="#962810")
+                self.new_version_available = None
+                
+        except Exception as e:
+            self.log(f"❌ Lỗi trong quá trình cập nhật: {e}")
+            messagebox.showerror(
+                "Lỗi cập nhật", 
+                f"Không thể tự động cập nhật: {e}\n\nBạn có thể tải bản mới nhất tại:\n{GITHUB_REPO_URL}"
+            )
             
     def on_filter_change(self, *args):
         search_query = self.search_var.get().lower().strip()
@@ -981,6 +1160,16 @@ class GemloginCookieGUI:
                         self.profile_rows[p_id].set_status(text, color)
                 elif msg_type == 'finished':
                     self.on_extraction_finished(data)
+                elif msg_type == 'update_available':
+                    new_ver = data
+                    self.new_version_available = new_ver
+                    self.update_btn.config(
+                        text=f"🔥 Có bản mới v{new_ver}! Bấm Cập nhật",
+                        bg="#28a745",
+                        activebackground="#218838"
+                    )
+                    self.write_log_to_widget(f"📢 [CẬP NHẬT] Đã có phiên bản mới: v{new_ver} trên GitHub (Bản hiện tại: v{get_current_version()}).")
+                    self.write_log_to_widget(f"   👉 Hãy nhấp nút '🔥 Có bản mới v{new_ver}!' trên góc phải tiêu đề để cập nhật.")
         except queue.Empty:
             pass
         self.root.after(100, self.process_ui_queue)

@@ -12,6 +12,7 @@ Công cụ tự động hóa đa luồng hỗ trợ quản lý Profile GemLogin,
 - Trích xuất Cookie tinh gọn: Lọc các cookie cốt lõi (SPC_ST, SPC_U, csrftoken...) chuẩn MLS.
 - Tùy biến định dạng xuất: Xuất định dạng Tên|Cookie hoặc Chỉ Cookie.
 - Ghi nhớ cấu hình: Tự động lưu và khôi phục cài đặt phiên làm việc trước qua config.json.
+- Tự động Kiểm tra & Nâng cấp: Tự động quét phiên bản mới từ GitHub, hiển thị thông báo và nút Cập nhật 1-click trực tiếp trên giao diện.
 - Đẩy code GitHub tự động: Kèm script upload-github.run / upload-github.bat tự động tăng phiên bản (Version Bump).
 
 ## Hướng dẫn sử dụng

@@ -6,9 +6,9 @@
     "clean_cookie": true,
     "output_file": "shopee_cookies.txt",
     "export_format": "Tên|Cookie",
+    "ext_path": "E:\\reup SP mơi\\Cookie Shopee 26.08.2026",
     "sheet_url": "",
     "user_col": "E",
     "profile_col": "G",
-    "default_pass": "Khoa01@c",
-    "ext_path": "E:\\reup SP mơi\\Cookie Shopee 26.08.2026"
+    "default_pass": "Khoa01@c"
 }
