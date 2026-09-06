@@ -509,38 +509,12 @@ class GemloginCookieGUI:
             font=("Arial", 9, "bold"),
             borderwidth=0, 
             pady=7, 
-            command=self.start_extraction
+            command=self.on_start_or_stop_click
         )
         self.start_btn.pack(fill=tk.X, pady=2)
         
-        self.stop_btn = tk.Button(
-            self.left_panel, 
-            text="🛑 DỪNG TIẾN TRÌNH", 
-            bg="#3d3d3d", 
-            fg=TEXT_WHITE, 
-            activebackground=BG_HOVER, 
-            activeforeground=TEXT_WHITE,
-            font=("Arial", 9, "bold"),
-            borderwidth=0, 
-            pady=6, 
-            state=tk.DISABLED,
-            command=self.stop_extraction
-        )
-        self.stop_btn.pack(fill=tk.X, pady=2)
-        
-        self.refresh_btn = tk.Button(
-            self.left_panel, 
-            text="🔄 TẢI LẠI PROFILE", 
-            bg="#2d2d2d", 
-            fg=TEXT_WHITE, 
-            activebackground=BG_HOVER, 
-            activeforeground=TEXT_WHITE, 
-            font=("Arial", 9),
-            borderwidth=0, 
-            pady=5, 
-            command=lambda: self.load_profiles(is_manual=True)
-        )
-        self.refresh_btn.pack(fill=tk.X, pady=2)
+        self.stop_btn = None
+        self.refresh_btn = None
         
         self.install_ext_btn = tk.Button(
             self.left_panel, 
@@ -663,6 +637,21 @@ class GemloginCookieGUI:
         self.group_menu["menu"].config(bg=BG_CARD, fg=TEXT_WHITE, activebackground=ACCENT_ORANGE, activeforeground=TEXT_WHITE, font=("Arial", 9))
         self.group_menu.pack(side=tk.LEFT, padx=(0, 15))
         self.group_var.trace_add("write", self.on_filter_change)
+        
+        # Nút Tải lại profile đặt tại thanh công cụ profile
+        self.refresh_btn = tk.Button(
+            filter_row1, 
+            text="🔄 Tải lại", 
+            bg="#2d2d2d", 
+            fg=TEXT_WHITE, 
+            activebackground=BG_HOVER, 
+            activeforeground=TEXT_WHITE, 
+            font=("Arial", 9, "bold"),
+            borderwidth=0, 
+            padx=10, 
+            command=lambda: self.load_profiles(is_manual=True)
+        )
+        self.refresh_btn.pack(side=tk.RIGHT, padx=(6, 0), ipady=2)
         
         # Search Entry
         self.search_var = tk.StringVar()
@@ -1114,7 +1103,8 @@ class GemloginCookieGUI:
         
     def load_profiles(self, is_manual=False):
         # Đổi trạng thái nút làm mới sang đang tải
-        self.refresh_btn.config(state=tk.DISABLED, text="⏳ ĐANG TẢI...")
+        if hasattr(self, 'refresh_btn') and self.refresh_btn:
+            self.refresh_btn.config(state=tk.DISABLED, text="⏳ Đang tải...")
         
         # Xóa danh sách profile cũ trên giao diện
         for row in self.profile_rows.values():
@@ -1159,7 +1149,7 @@ class GemloginCookieGUI:
                     self.log(f"Phát hiện {len(running_ids)} profile đang mở sẵn.")
                 else:
                     self.log("⚠️ Không thể kết nối tới Gemlogin API cục bộ trên cổng 1010.")
-                    self.log("💡 Vui lòng đảm bảo phần mềm Gemlogin đang mở và bấm nút '🔄 TẢI LẠI PROFILE' để thử lại.")
+                    self.log("💡 Vui lòng đảm bảo phần mềm Gemlogin đang mở và bấm nút '🔄 Tải lại' để thử lại.")
                 
                 # Cập nhật kết quả lên giao diện chính
                 self.root.after(0, lambda: self._on_profiles_loaded(profiles, groups, running_ids, is_manual))
@@ -1170,7 +1160,8 @@ class GemloginCookieGUI:
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_profiles_loaded(self, profiles, groups, running_ids, is_manual):
-        self.refresh_btn.config(state=tk.NORMAL, text="🔄 TẢI LẠI PROFILE")
+        if hasattr(self, 'refresh_btn') and self.refresh_btn:
+            self.refresh_btn.config(state=tk.NORMAL, text="🔄 Tải lại")
         self.groups = groups
         self.profiles = profiles
         self.running_ids_before = running_ids
@@ -1246,6 +1237,12 @@ class GemloginCookieGUI:
             pass
         self.root.after(100, self.process_ui_queue)
         
+    def on_start_or_stop_click(self):
+        if self.is_extracting:
+            self.stop_extraction()
+        else:
+            self.start_extraction()
+
     def start_extraction(self):
         if self.is_extracting:
             return
@@ -1286,9 +1283,11 @@ class GemloginCookieGUI:
         # Update UI state
         self.is_extracting = True
         self.stop_requested = False
-        self.start_btn.config(state=tk.DISABLED, text="⚡ ĐANG CHẠY...")
-        self.stop_btn.config(state=tk.NORMAL)
-        self.refresh_btn.config(state=tk.DISABLED)
+        self.start_btn.config(state=tk.NORMAL, text="🛑 DỪNG TIẾN TRÌNH", bg="#c0392b", activebackground="#962d22")
+        if self.stop_btn:
+            self.stop_btn.config(state=tk.NORMAL)
+        if hasattr(self, 'refresh_btn') and self.refresh_btn:
+            self.refresh_btn.config(state=tk.DISABLED)
         self.search_entry.config(state=tk.DISABLED)
         
         # Clear log screen for clean run
@@ -1328,7 +1327,9 @@ class GemloginCookieGUI:
             
         self.stop_requested = True
         self.log("🛑 Đang gửi yêu cầu dừng tiến trình... vui lòng đợi hoàn thành đợt hiện tại.")
-        self.stop_btn.config(state=tk.DISABLED, text="⏳ Đang dừng...")
+        self.start_btn.config(state=tk.DISABLED, text="⏳ Đang dừng...")
+        if self.stop_btn:
+            self.stop_btn.config(state=tk.DISABLED, text="⏳ Đang dừng...")
         
     def install_extension_to_selected(self):
         """Cài đặt và ghim Extension Cookie Shopee vào tất cả profile đang được tích chọn"""
@@ -1554,8 +1555,11 @@ class GemloginCookieGUI:
             
         self.is_extracting = True
         self.stop_requested = False
-        self.start_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
+        self.start_btn.config(state=tk.NORMAL, text="🛑 DỪNG TIẾN TRÌNH", bg="#c0392b", activebackground="#962d22")
+        if self.stop_btn:
+            self.stop_btn.config(state=tk.NORMAL)
+        if hasattr(self, 'refresh_btn') and self.refresh_btn:
+            self.refresh_btn.config(state=tk.DISABLED)
         self.progress_lbl.config(text=f"Tiến độ: 0 / {len(selected_ids)}")
         self.progress_bar.config(maximum=len(selected_ids), value=0)
         
@@ -1958,9 +1962,11 @@ class GemloginCookieGUI:
         self.is_extracting = False
         
         # Reset UI controls
-        self.start_btn.config(state=tk.NORMAL, text="🚀 BẮT ĐẦU TRÍCH XUẤT")
-        self.stop_btn.config(state=tk.DISABLED, text="🛑 DỪNG TIẾN TRÌNH")
-        self.refresh_btn.config(state=tk.NORMAL)
+        self.start_btn.config(state=tk.NORMAL, text="🚀 BẮT ĐẦU TRÍCH XUẤT", bg=ACCENT_ORANGE, activebackground="#d63d1e")
+        if self.stop_btn:
+            self.stop_btn.config(state=tk.DISABLED, text="🛑 DỪNG TIẾN TRÌNH")
+        if hasattr(self, 'refresh_btn') and self.refresh_btn:
+            self.refresh_btn.config(state=tk.NORMAL, text="🔄 Tải lại")
         self.search_entry.config(state=tk.NORMAL)
         
         # Scan again to see current state
