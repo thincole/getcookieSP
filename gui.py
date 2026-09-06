@@ -1082,6 +1082,11 @@ class GemloginCookieGUI:
             row.frame.destroy()
         self.profile_rows.clear()
         
+        # 1. Tự động kiểm tra Gemlogin đã chạy chưa (chưa chạy thì tự mở, chạy rồi thì bỏ qua)
+        extractor.ensure_gemlogin_running(
+            logger_callback=lambda m: (self.log(m), self.write_log_to_widget(m), self.root.update_idletasks())
+        )
+        
         self.log("Đang tải danh sách profile từ API cục bộ Gemlogin (127.0.0.1:1010)...")
         
         # Get groups from API

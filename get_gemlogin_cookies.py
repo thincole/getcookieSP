@@ -26,6 +26,104 @@ except ImportError:
 # API Config
 GEMLOGIN_API = "http://127.0.0.1:1010"
 
+def find_gemlogin_executable():
+    """Tìm đường dẫn thực thi của Gemlogin trên máy tính"""
+    candidates = [
+        r'C:\Program Files\Gemlogin\Gemlogin.exe',
+        os.path.expandvars(r'%PROGRAMFILES%\Gemlogin\Gemlogin.exe'),
+        os.path.expandvars(r'%PROGRAMFILES(X86)%\Gemlogin\Gemlogin.exe'),
+        os.path.expandvars(r'%LOCALAPPDATA%\Programs\Gemlogin\Gemlogin.exe'),
+        os.path.expandvars(r'%LOCALAPPDATA%\Gemlogin\Gemlogin.exe'),
+        r'C:\Gemlogin\Gemlogin.exe',
+        r'D:\Gemlogin\Gemlogin.exe',
+        r'E:\Gemlogin\Gemlogin.exe',
+        r'F:\Gemlogin\Gemlogin.exe',
+    ]
+    for p in candidates:
+        if p and os.path.exists(p) and os.path.isfile(p):
+            return p
+            
+    shortcuts = [
+        os.path.expandvars(r'%PUBLIC%\Desktop\Gemlogin.lnk'),
+        os.path.expandvars(r'%USERPROFILE%\Desktop\Gemlogin.lnk'),
+        os.path.expandvars(r'%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs\Gemlogin\Gemlogin.lnk'),
+    ]
+    for sc in shortcuts:
+        if os.path.exists(sc):
+            return sc
+            
+    return None
+
+def is_gemlogin_running():
+    """Kiểm tra xem tiến trình Gemlogin.exe có đang chạy không"""
+    try:
+        res = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq Gemlogin.exe', '/NH'], capture_output=True, text=True, errors='ignore')
+        return 'gemlogin.exe' in res.stdout.lower()
+    except Exception:
+        return False
+
+def is_gemlogin_api_ready():
+    """Kiểm tra API cục bộ của Gemlogin (127.0.0.1:1010) đã sẵn sàng nhận kết nối chưa"""
+    try:
+        req = urllib.request.Request(f"{GEMLOGIN_API}/api/profiles?per_page=1", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+def ensure_gemlogin_running(logger_callback=None):
+    """
+    Tự động quét xem Gemlogin đã chạy chưa:
+    - Nếu đã chạy và API sẵn sàng: bỏ qua
+    - Nếu tiến trình đang chạy nhưng API chưa mở: đợi API sẵn sàng
+    - Nếu chưa chạy: tự động khởi chạy Gemlogin và đợi API sẵn sàng
+    """
+    def _log(msg):
+        if logger_callback:
+            logger_callback(msg)
+        else:
+            print(msg)
+
+    # 1. Nếu API đã sẵn sàng: Bỏ qua
+    if is_gemlogin_api_ready():
+        _log("ℹ️ Gemlogin đã mở và API sẵn sàng.")
+        return True, "Gemlogin đã chạy sẵn và API đã mở."
+
+    # 2. Kiểm tra xem tiến trình Gemlogin.exe có đang chạy không
+    process_running = is_gemlogin_running()
+    
+    if not process_running:
+        exe_path = find_gemlogin_executable()
+        if not exe_path:
+            _log("⚠️ Không tìm thấy file Gemlogin.exe. Vui lòng mở Gemlogin thủ công.")
+            return False, "Không tìm thấy file Gemlogin.exe."
+            
+        _log(f"🚀 Phát hiện Gemlogin chưa chạy. Đang tự động mở: {exe_path}...")
+        try:
+            if exe_path.endswith('.lnk'):
+                os.startfile(exe_path)
+            else:
+                subprocess.Popen([exe_path], close_fds=True)
+        except Exception as e:
+            _log(f"❌ Không thể khởi động Gemlogin: {e}")
+            return False, f"Lỗi khởi chạy: {e}"
+    else:
+        _log("ℹ️ Tiến trình Gemlogin đang mở. Đang chờ API sẵn sàng...")
+
+    # 3. Đợi Gemlogin và API cục bộ (cổng 1010) khởi động hoàn tất
+    _log("⏳ Đang đợi Gemlogin khởi động và kích hoạt API cục bộ (127.0.0.1:1010)...")
+    max_wait = 30  # tối đa 30 giây
+    start_time = time.time()
+    while time.time() - start_time < max_wait:
+        if is_gemlogin_api_ready():
+            _log("✅ Gemlogin đã khởi động và API (cổng 1010) đã sẵn sàng!")
+            time.sleep(1)
+            return True, "Gemlogin đã sẵn sàng."
+        time.sleep(1.5)
+
+    _log("⚠️ Đã khởi động Gemlogin nhưng API chưa phản hồi kịp. Bạn có thể bấm nút '🔄 TẢI LẠI PROFILE' sau khi Gemlogin load xong.")
+    return False, "Hết thời gian chờ API Gemlogin."
+
 # Target Shopee domains
 SHOPEE_DOMAINS = [
     "shopee.vn",

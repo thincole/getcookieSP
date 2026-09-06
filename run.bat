@@ -96,6 +96,23 @@ if errorlevel 1 (
     exit /b
 )
 
+:: Kiem tra phan mem Gemlogin
+echo [*] Kiem tra phan mem Gemlogin...
+tasklist /FI "IMAGENAME eq Gemlogin.exe" 2>nul | findstr /i "Gemlogin.exe" >nul
+if errorlevel 1 (
+    echo [!] Gemlogin chua chay. Dang tu dong khoi dong Gemlogin...
+    if exist "C:\Program Files\Gemlogin\Gemlogin.exe" (
+        start "" "C:\Program Files\Gemlogin\Gemlogin.exe"
+    ) else if exist "%LOCALAPPDATA%\Programs\Gemlogin\Gemlogin.exe" (
+        start "" "%LOCALAPPDATA%\Programs\Gemlogin\Gemlogin.exe"
+    ) else if exist "%PUBLIC%\Desktop\Gemlogin.lnk" (
+        start "" "%PUBLIC%\Desktop\Gemlogin.lnk"
+    )
+) else (
+    echo [OK] Gemlogin da dang chay san.
+)
+echo.
+
 :: Chay GUI
 echo [*] Dang mo giao dien...
 start "" "%PW%" "%~dp0gui.py"
