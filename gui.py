@@ -369,6 +369,21 @@ class GemloginCookieGUI:
             anchor="w"
         )
         self.clean_cookie_check.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        cb_frame2 = tk.Frame(self.left_panel, bg=BG_CARD)
+        cb_frame2.pack(fill=tk.X, pady=(2, 6))
+
+        self.no_proxy_var = tk.BooleanVar(value=True)
+        self.no_proxy_check = tk.Checkbutton(
+            cb_frame2,
+            text="⚡ Không fake IP (Dùng IP mạng chính)",
+            variable=self.no_proxy_var,
+            bg=BG_CARD, fg="#4ade80", selectcolor="#2d2d2d",
+            activebackground=BG_CARD, activeforeground="#4ade80",
+            font=("Arial", 8, "bold"),
+            anchor="w"
+        )
+        self.no_proxy_check.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         # Clear site data var
         self.clear_site_data_var = tk.BooleanVar(value=False)
@@ -814,6 +829,7 @@ class GemloginCookieGUI:
                 "country": self.country_var.get() if hasattr(self, 'country_var') else "PH (Philippines)",
                 "mobile_ua": self.mobile_ua_var.get() if hasattr(self, 'mobile_ua_var') else False,
                 "clean_cookie": self.clean_cookie_var.get() if hasattr(self, 'clean_cookie_var') else True,
+                "no_proxy": self.no_proxy_var.get() if hasattr(self, 'no_proxy_var') else True,
                 "output_file": self.output_entry.get().strip() if hasattr(self, 'output_entry') else "shopee_cookies.txt",
                 "export_format": self.export_format_var.get() if hasattr(self, 'export_format_var') else "Tên|Cookie",
                 "ext_path": self.ext_path_entry.get().strip() if hasattr(self, 'ext_path_entry') else "",
@@ -852,6 +868,9 @@ class GemloginCookieGUI:
                 
             if "clean_cookie" in config and hasattr(self, 'clean_cookie_var'):
                 self.clean_cookie_var.set(bool(config["clean_cookie"]))
+
+            if "no_proxy" in config and hasattr(self, 'no_proxy_var'):
+                self.no_proxy_var.set(bool(config["no_proxy"]))
                 
             if "output_file" in config and hasattr(self, 'output_entry'):
                 self.output_entry.delete(0, tk.END)
@@ -1417,6 +1436,7 @@ class GemloginCookieGUI:
         if clear_data:
             self.log(f"🧹 Tuỳ chọn 'Xoá cookie & Site Data Shopee' đang BẬT: Đang dọn sạch data ({target_domain}) trước khi mở trình duyệt...")
             
+        no_proxy = self.no_proxy_var.get() if hasattr(self, 'no_proxy_var') else True
         p_lookup = {p['id']: p for p in self.profiles}
         for p_id in selected_ids:
             p_info = p_lookup.get(p_id)
@@ -1425,13 +1445,16 @@ class GemloginCookieGUI:
             if not p_path or not os.path.exists(p_path):
                 p_path = f"F:\\gemlogin\\profiles\\{p_id}"
             b_ver = p_info.get('browser_version', 140) if p_info else 140
+            p_proxy = extractor.extract_profile_proxy(p_info) if not no_proxy else None
             
             ok, msg = extractor.open_profile_with_extension(
                 p_path, 
                 browser_version=b_ver, 
                 ext_path=ext_path, 
                 clear_site_data=clear_data, 
-                domain=target_domain
+                domain=target_domain,
+                no_proxy=no_proxy,
+                proxy=p_proxy
             )
             if ok:
                 self.log(f"🌐 [{p_id}] {p_name}: {msg}")
@@ -1545,6 +1568,7 @@ class GemloginCookieGUI:
         target_domain = country_domain_map.get(self.country_var.get(), "shopee.ph")
         output_file = self.output_entry.get().strip() or "shopee_cookies.txt"
         clean_cookie = self.clean_cookie_var.get()
+        no_proxy = self.no_proxy_var.get() if hasattr(self, 'no_proxy_var') else True
         
         try:
             batch_size = int(self.batch_entry.get().strip())
@@ -1560,9 +1584,10 @@ class GemloginCookieGUI:
         except ValueError:
             delay = 1
             
+        net_mode_confirm = "⚡ Dùng IP mạng chính (Không fake IP)" if no_proxy else "🌐 Dùng Proxy của Profile"
         confirm = messagebox.askyesno(
             "Xác nhận Tự động Đăng nhập Đa Luồng",
-            f"Bạn có chắc muốn tự động Đăng nhập (FB / Google Sheet) & Lấy Cookie cho {len(selected_ids)} profile đã chọn không?\n\nSố luồng chạy đồng thời: {batch_size}\nĐộ trễ giãn cách: {delay} giây\nDomain: {target_domain}\nFile lưu: {output_file}"
+            f"Bạn có chắc muốn tự động Đăng nhập (FB / Google Sheet) & Lấy Cookie cho {len(selected_ids)} profile đã chọn không?\n\nSố luồng chạy đồng thời: {batch_size}\nĐộ trễ giãn cách: {delay} giây\nChế độ mạng: {net_mode_confirm}\nDomain: {target_domain}\nFile lưu: {output_file}"
         )
         if not confirm:
             return
@@ -1581,12 +1606,13 @@ class GemloginCookieGUI:
         
         threading.Thread(
             target=self.run_auto_fb_login_thread, 
-            args=(selected_ids, target_domain, output_file, clean_cookie, batch_size, delay), 
+            args=(selected_ids, target_domain, output_file, clean_cookie, batch_size, delay, no_proxy), 
             daemon=True
         ).start()
 
-    def run_auto_fb_login_thread(self, selected_ids, target_domain, output_file, clean_cookie, batch_size=3, delay=1):
-        self.log(f"=== Bắt đầu Tự động Đăng nhập ĐA LUỒNG cho {len(selected_ids)} profile (Số luồng: {batch_size} | Độ trễ: {delay}s) ===")
+    def run_auto_fb_login_thread(self, selected_ids, target_domain, output_file, clean_cookie, batch_size=3, delay=1, no_proxy=True):
+        net_mode_label = "⚡ Không fake IP (Dùng IP mạng chính)" if no_proxy else "🌐 Dùng Proxy của Profile"
+        self.log(f"=== Bắt đầu Tự động Đăng nhập ĐA LUỒNG cho {len(selected_ids)} profile (Số luồng: {batch_size} | Độ trễ: {delay}s | Mạng: {net_mode_label}) ===")
         self.log(f"Thị trường: {target_domain} | File lưu: {os.path.abspath(output_file)}")
         
         # Tự động nạp Google Sheet nếu có link nhưng chưa bấm nút Nạp
@@ -1643,11 +1669,14 @@ class GemloginCookieGUI:
             cdp_port = 52000 + (p_id % 5000)
             initial_url = f"https://{target_domain}/buyer/login?from=%2F&next=%2F"
             current_ext = self.ext_path_entry.get().strip() if hasattr(self, 'ext_path_entry') else extractor.EXTENSION_PATH
+            p_proxy = extractor.extract_profile_proxy(p_info) if not no_proxy else None
             proc, debug_addr = extractor.open_profile_with_extension_and_cdp(
                 p_path, 
                 port=cdp_port, 
                 ext_path=current_ext, 
-                initial_url=initial_url
+                initial_url=initial_url,
+                no_proxy=no_proxy,
+                proxy=p_proxy
             )
             if not debug_addr:
                 debug_addr, driver = extractor.api_start_profile(p_id)
@@ -1661,7 +1690,7 @@ class GemloginCookieGUI:
                 return
                 
             try:
-                time.sleep(2.5)
+                time.sleep(2.0)
                 ws_url = extractor.get_websocket_url(debug_addr)
                 if not ws_url:
                     self.log(f"❌ [{p_id}] {p_name}: Không tìm thấy cổng CDP")
@@ -1684,7 +1713,7 @@ class GemloginCookieGUI:
                     
                 # 1. BƯỚC 1 (ƯU TIÊN): Kiểm tra tài khoản lưu sẵn (autofill / Login Data) trong trình duyệt
                 if not is_logged_in:
-                    self.log(f"🔐 [{p_id}] {p_name}: Kiểm tra tài khoản lưu sẵn trong trình duyệt...")
+                    self.log(f"🔐 [{p_id}] {p_name}: Đợi trang đăng nhập tải & kiểm tra tài khoản lưu sẵn...")
                     self.ui_update_queue.put(('status', (p_id, "Kiểm tra login lưu sẵn...", STATUS_RUNNING)))
                     
                     # Kiểm tra xem trình duyệt đã mở trang login hay chưa, chỉ navigate nếu chưa ở trang login
@@ -1695,12 +1724,9 @@ class GemloginCookieGUI:
                         if 'buyer/login' not in curr_url:
                             ws_chk.send(json.dumps({'id': 101, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/buyer/login?from=%2F&next=%2F"}}))
                             ws_chk.recv()
-                            time.sleep(2.5)
-                        else:
-                            time.sleep(1.0)
                         ws_chk.close()
                     except Exception:
-                        time.sleep(1.5)
+                        pass
 
                     res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain, default_password=default_pass, profile_path=p_path)
                     ok_saved = res_saved[0] if isinstance(res_saved, (tuple, list)) else bool(res_saved)

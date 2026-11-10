@@ -442,30 +442,6 @@ def clear_shopee_site_data(profile_path, domain="shopee.ph", debug_addr=None):
     msg = ", ".join(cleaned_items) if cleaned_items else f"Đã sạch dữ liệu {target_domain}"
     return True, msg
 
-def open_profile_with_extension(profile_path, browser_version=140, ext_path=EXTENSION_PATH, clear_site_data=False, domain="shopee.ph"):
-    """
-    Mở trực tiếp trình duyệt Chrome của profile kèm cờ --load-extension
-    để nạp Extension Cookie Shopee ngay lập tức lên thanh công cụ.
-    Tùy chọn clear_site_data=True sẽ dọn sạch cookies & site data trước khi mở.
-    """
-    if clear_site_data:
-        clear_shopee_site_data(profile_path, domain=domain)
-
-    ext_path = os.path.abspath(ext_path)
-    
-    # Tìm file thực thi chrome.exe của Gemlogin
-    candidates = [
-        rf"C:\Users\{os.getlogin()}\.gemlogin\browser\{browser_version}\Chrome-bin\chrome.exe",
-        rf"C:\Users\{os.getlogin()}\.gemlogin\browser\140\Chrome-bin\chrome.exe",
-        rf"C:\Users\{os.getlogin()}\.gemlogin\browser\141\Chrome-bin\chrome.exe",
-    ]
-    
-    chrome_exe = None
-    for c in candidates:
-        if os.path.exists(c):
-            chrome_exe = c
-            break
-            
 def suppress_chrome_restore_popups(profile_path):
     """
     Sửa file Preferences của Profile để xóa cờ Crash, ngăn chặn hoàn toàn thông báo 'Restore pages?'.
@@ -493,11 +469,12 @@ def suppress_chrome_restore_popups(profile_path):
             except Exception:
                 pass
 
-def open_profile_with_extension(profile_path, browser_version=140, ext_path=EXTENSION_PATH, clear_site_data=False, domain="shopee.ph"):
+def open_profile_with_extension(profile_path, browser_version=140, ext_path=EXTENSION_PATH, clear_site_data=False, domain="shopee.ph", no_proxy=True, proxy=None):
     """
     Mở trực tiếp profile Gemlogin bằng chrome.exe kèm cờ --load-extension
     để nạp Extension Cookie Shopee ngay lập tức lên thanh công cụ.
     Tùy chọn clear_site_data=True sẽ dọn sạch cookies & site data trước khi mở.
+    no_proxy=True: Dùng cờ --no-proxy-server để dùng IP mạng chính trực tiếp, không fake IP.
     """
     if clear_site_data:
         clear_shopee_site_data(profile_path, domain=domain)
@@ -532,20 +509,38 @@ def open_profile_with_extension(profile_path, browser_version=140, ext_path=EXTE
         "--disable-infobars",
         "--disable-notifications",
         "--noerrdialogs",
-        "--disable-features=Translate,OptimizationHints,MediaRouter",
-        f"https://{domain}"
+        "--disable-features=Translate,OptimizationHints,MediaRouter"
     ]
+    
+    if no_proxy:
+        cmd.extend(["--no-proxy-server", "--proxy-bypass-list=*"])
+    elif proxy:
+        p_str = proxy.strip()
+        if p_str.startswith("http://") or p_str.startswith("socks5://"):
+            parts = p_str.split("://", 1)
+            scheme = parts[0]
+            host_port = parts[1].split(":")
+            if len(host_port) >= 2:
+                cmd.append(f"--proxy-server={scheme}://{host_port[0]}:{host_port[1]}")
+        else:
+            host_port = p_str.split(":")
+            if len(host_port) >= 2:
+                cmd.append(f"--proxy-server={host_port[0]}:{host_port[1]}")
+
+    cmd.append(f"https://{domain}")
     
     try:
         subprocess.Popen(cmd)
-        return True, f"Đã mở profile kèm extension từ: {ext_path}"
+        mode_str = " (Dùng IP mạng chính)" if no_proxy else (" (Proxy: " + (proxy or "mặc định") + ")")
+        return True, f"Đã mở profile kèm extension{mode_str}"
     except Exception as e:
         return False, f"Lỗi khởi động trình duyệt: {e}"
 
-def open_profile_with_extension_and_cdp(profile_path, port=52000, ext_path=EXTENSION_PATH, initial_url=None):
+def open_profile_with_extension_and_cdp(profile_path, port=52000, ext_path=EXTENSION_PATH, initial_url=None, no_proxy=True, proxy=None):
     """
     Khởi chạy Chrome trực tiếp kèm Extension và mở cổng Remote Debugging (CDP).
     Đảm bảo 100% Extension hoạt động và tự động ép giao diện sang Mobile.
+    Nếu no_proxy=True: Dùng cờ --no-proxy-server và --proxy-bypass-list=* để kết nối trực tiếp qua mạng chính.
     Trả về (proc, debug_addr) hoặc (None, None).
     """
     suppress_chrome_restore_popups(profile_path)
@@ -580,6 +575,22 @@ def open_profile_with_extension_and_cdp(profile_path, port=52000, ext_path=EXTEN
         "--noerrdialogs",
         "--disable-features=Translate,OptimizationHints,MediaRouter"
     ]
+    
+    if no_proxy:
+        cmd.extend(["--no-proxy-server", "--proxy-bypass-list=*"])
+    elif proxy:
+        p_str = proxy.strip()
+        if p_str.startswith("http://") or p_str.startswith("socks5://"):
+            parts = p_str.split("://", 1)
+            scheme = parts[0]
+            host_port = parts[1].split(":")
+            if len(host_port) >= 2:
+                cmd.append(f"--proxy-server={scheme}://{host_port[0]}:{host_port[1]}")
+        else:
+            host_port = p_str.split(":")
+            if len(host_port) >= 2:
+                cmd.append(f"--proxy-server={host_port[0]}:{host_port[1]}")
+
     if initial_url:
         cmd.append(initial_url)
         
@@ -956,6 +967,63 @@ def extract_csrf_5_steps(ws_url, shopee_domain):
     except Exception as e:
         print(f"    ⚠️ CSRF 5-step pipeline error: {e}")
     
+def wait_for_login_page_loaded(ws_url, timeout=18):
+    """
+    Chờ trang Shopee tải xong DOM và hiển thị các trường đăng nhập hoặc nút đăng nhập.
+    Tránh tình trạng trang đang trắng / Loading mà đã vội vàng thao tác script.
+    Trả về (True, 'Đã tải xong') hoặc (False, 'Lý do timeout/lỗi').
+    """
+    start_time = time.time()
+    
+    check_js = """
+    (() => {
+        const readyState = document.readyState;
+        const allInputs = Array.from(document.querySelectorAll('input'));
+        
+        // Kiểm tra xem có ô nhập username / password hiển thị không
+        const hasUserInput = Boolean(
+            document.querySelector('input[name="loginKey"]') ||
+            document.querySelector('input[autocomplete="username"]') ||
+            allInputs.some(i => i.type !== 'password' && i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.offsetParent !== null)
+        );
+        const hasPassInput = Boolean(
+            document.querySelector('input[name="password"]') ||
+            document.querySelector('input[autocomplete="current-password"]') ||
+            allInputs.some(i => i.type === 'password' && i.offsetParent !== null)
+        );
+        const hasLoginBtn = Boolean(
+            document.querySelector('button[type="submit"]') ||
+            Array.from(document.querySelectorAll('button, div[role="button"]')).some(b => {
+                const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+                return t === 'log in' || t === 'login' || t === 'đăng nhập' || t.includes('facebook');
+            })
+        );
+        
+        return {
+            readyState: readyState,
+            formReady: (hasUserInput && hasPassInput) || (hasUserInput && hasLoginBtn),
+            hasUserInput: hasUserInput,
+            hasPassInput: hasPassInput,
+            hasLoginBtn: hasLoginBtn
+        };
+    })()
+    """
+    
+    while time.time() - start_time < timeout:
+        try:
+            ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=3)
+            ws.send(json.dumps({'id': 201, 'method': 'Runtime.evaluate', 'params': {'expression': check_js, 'returnByValue': True}}))
+            res_raw = ws.recv()
+            ws.close()
+            res = json.loads(res_raw).get('result', {}).get('result', {}).get('value', {})
+            if res and res.get('formReady'):
+                return True, "Trang đăng nhập đã tải hoàn tất form nhập liệu"
+        except Exception:
+            pass
+        time.sleep(1.0)
+        
+    return False, "Trang tải quá lâu hoặc chưa hiển thị form đăng nhập (trang trắng/mạng chậm)"
+
 def perform_auto_facebook_login(ws_url, domain="shopee.ph", debug_addr=None):
     """
     Tự động đợi trang Shopee tải hoàn chỉnh, dùng tín hiệu Trusted CDP Mouse Click bấm nút Facebook và nút Continue.
@@ -963,12 +1031,12 @@ def perform_auto_facebook_login(ws_url, domain="shopee.ph", debug_addr=None):
     target_domain = domain if domain else "shopee.ph"
     
     try:
+        # Chờ trang tải hoàn tất form/nút đăng nhập
+        wait_for_login_page_loaded(ws_url, timeout=12)
+        
         ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=20)
         
-        # 1. Đợi trang Shopee Mobile tải hoàn tất toàn bộ script & React (8 giây)
-        time.sleep(8)
-        
-        # 2. Tìm tọa độ nút 'Login with Facebook'
+        # 1. Tìm tọa độ nút 'Login with Facebook'
         get_fb_coords_js = """
         (() => {
             for (const el of document.querySelectorAll('button, a, div[role="button"], div')) {
@@ -1169,6 +1237,11 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
     Tự động điền Username (Cột E) & Mật khẩu (mặc định Khoa01@c), rồi click nút LOG IN trên Shopee Mobile.
     """
     try:
+        # Chờ trang tải hoàn tất form nhập liệu (tối đa 12 giây)
+        form_ok, form_msg = wait_for_login_page_loaded(ws_url, timeout=12)
+        if not form_ok:
+            return False, f"Trang chưa sẵn sàng điền form ({form_msg})"
+
         ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=20)
         
         # 1. Điền Username và Password vào Form
@@ -1177,7 +1250,11 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
             function setInput(input, value) {
                 input.focus();
                 const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                setter.call(input, value);
+                if (setter) {
+                    setter.call(input, value);
+                } else {
+                    input.value = value;
+                }
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
             }
@@ -1207,8 +1284,12 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
         
         ws.send(json.dumps({'id': 302, 'method': 'Runtime.evaluate', 'params': {'expression': fill_form_js, 'returnByValue': True}}))
         fill_res = json.loads(ws.recv()).get('result', {}).get('result', {}).get('value', {})
-        time.sleep(1)
+        time.sleep(0.5)
         
+        if not fill_res or not fill_res.get('userFilled'):
+            ws.close()
+            return False, "Không tìm thấy ô điền tên đăng nhập trên trang"
+            
         # 2. Tìm tọa độ nút LOG IN và gửi Trusted Mouse Click
         get_login_btn_js = """
         (() => {
@@ -1217,8 +1298,13 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
                 if (el.closest('footer') || el.closest('.footer')) continue;
                 const t = (el.innerText || el.textContent || el.value || '').trim().toLowerCase();
                 if (t === 'login' || t === 'log in' || t === 'đăng nhập') {
+                    try {
+                        el.removeAttribute('disabled');
+                        el.disabled = false;
+                    } catch(e) {}
                     el.scrollIntoView({block: 'center'});
                     const rect = el.getBoundingClientRect();
+                    try { el.click(); } catch(e) {}
                     return {
                         success: true,
                         x: Math.round(rect.left + rect.width / 2),
@@ -1232,7 +1318,7 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
         ws.send(json.dumps({'id': 303, 'method': 'Runtime.evaluate', 'params': {'expression': get_login_btn_js, 'returnByValue': True}}))
         login_btn_coords = json.loads(ws.recv()).get('result', {}).get('result', {}).get('value', {})
         
-        if login_btn_coords.get('success'):
+        if login_btn_coords and login_btn_coords.get('success'):
             lx, ly = login_btn_coords['x'], login_btn_coords['y']
             ws.send(json.dumps({'id': 310, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseMoved', 'x': lx, 'y': ly}}))
             ws.recv()
@@ -1242,16 +1328,25 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
             ws.send(json.dumps({'id': 312, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseReleased', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
             ws.recv()
             
-        # 3. Đợi nhận phiên đăng nhập (8 giây)
-        time.sleep(8)
-        ws.close()
-        return True, "Đã gửi thông tin đăng nhập tài khoản & mật khẩu"
+            time.sleep(0.3)
+            ws.send(json.dumps({'id': 313, 'method': 'Input.dispatchKeyEvent', 'params': {'type': 'rawKeyDown', 'key': 'Enter', 'code': 'Enter', 'windowsVirtualKeyCode': 13}}))
+            ws.recv()
+            ws.send(json.dumps({'id': 314, 'method': 'Input.dispatchKeyEvent', 'params': {'type': 'keyUp', 'key': 'Enter', 'code': 'Enter', 'windowsVirtualKeyCode': 13}}))
+            ws.recv()
+            
+            time.sleep(2)
+            ws.close()
+            return True, "Đã điền tài khoản & gửi lệnh bấm nút LOG IN"
+        else:
+            ws.close()
+            return False, "Không tìm thấy nút LOG IN trên trang để bấm"
     except Exception as e:
         return False, f"Lỗi đăng nhập bằng tài khoản: {e}"
 
 def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_password="Khoa01@c", profile_path=None):
     """
     Kiểm tra xem Username và Password đã được lưu sẵn trong trình duyệt (autofill hoặc SQLite Login Data):
+    - Đợi trang web và form đăng nhập tải hoàn tất trước khi thao tác
     - Đọc trước thông tin tài khoản đã lưu từ Login Data của profile (nếu có profile_path)
     - Kiểm tra ô input username & password trên trang Shopee
     - Đồng bộ giá trị vào React state bằng prototype setter và kích hoạt sự kiện input/change
@@ -1268,9 +1363,14 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
         if profile_path:
             db_user, db_pass = extract_saved_credentials_from_profile_db(profile_path, domain=target_domain)
 
+        # 1. Chờ trang tải hoàn tất form đăng nhập (tối đa 15 giây)
+        form_ok, form_msg = wait_for_login_page_loaded(ws_url, timeout=15)
+        if not form_ok:
+            return False, f"Trang chưa tải xong form đăng nhập ({form_msg})", None
+
         ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=20)
         
-        # 1. Vòng lặp phát hiện các ô input và autofill của Chrome
+        # 2. Vòng lặp phát hiện các ô input và autofill của Chrome
         detect_script = """
         (() => {
             const allInputs = Array.from(document.querySelectorAll('input'));
@@ -1314,13 +1414,13 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
         """
         
         creds = {}
-        for attempt in range(6):
+        for attempt in range(5):
             ws.send(json.dumps({'id': 350 + attempt, 'method': 'Runtime.evaluate', 'params': {'expression': detect_script, 'returnByValue': True}}))
             raw = ws.recv()
             creds = json.loads(raw).get('result', {}).get('result', {}).get('value', {})
             if creds and creds.get('uVal'):
                 break
-            time.sleep(0.8)
+            time.sleep(0.5)
             
         u_val = (creds.get('uVal') or '').strip()
         if not u_val and db_user:
@@ -1334,7 +1434,7 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
         if not p_val:
             p_val = db_pass or default_password or "Khoa01@c"
         
-        # 2. Bơm giá trị vào React state và Click nút LOG IN
+        # 3. Bơm giá trị vào React state và Click nút LOG IN
         submit_script = """
         ((user, pass) => {
             function setReactInput(input, value) {
@@ -1359,6 +1459,14 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
                 || document.querySelector('input[autocomplete="current-password"]')
                 || allInputs.find(i => i.type === 'password' && i.offsetParent !== null)
                 || document.querySelector('input[type="password"]');
+
+            if (!userInput && !passInput) {
+                return {
+                    success: false,
+                    btnFound: false,
+                    reason: 'Không tìm thấy các ô nhập trên giao diện'
+                };
+            }
 
             if (userInput) {
                 setReactInput(userInput, user);
@@ -1393,7 +1501,7 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
             }
 
             return {
-                success: true,
+                success: false,
                 btnFound: false,
                 user: user
             };
@@ -1403,16 +1511,19 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
         ws.send(json.dumps({'id': 360, 'method': 'Runtime.evaluate', 'params': {'expression': submit_script, 'returnByValue': True}}))
         submit_res = json.loads(ws.recv()).get('result', {}).get('result', {}).get('value', {})
         
-        if submit_res and submit_res.get('btnFound'):
-            lx, ly = submit_res['x'], submit_res['y']
-            ws.send(json.dumps({'id': 361, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseMoved', 'x': lx, 'y': ly}}))
-            ws.recv()
-            ws.send(json.dumps({'id': 362, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mousePressed', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
-            ws.recv()
-            time.sleep(0.08)
-            ws.send(json.dumps({'id': 363, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseReleased', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
-            ws.recv()
-            
+        if not submit_res or not submit_res.get('btnFound'):
+            ws.close()
+            return False, f"Đã phát hiện tài khoản '{u_val}' nhưng không tìm thấy nút LOG IN trên trang", None
+
+        lx, ly = submit_res['x'], submit_res['y']
+        ws.send(json.dumps({'id': 361, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseMoved', 'x': lx, 'y': ly}}))
+        ws.recv()
+        ws.send(json.dumps({'id': 362, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mousePressed', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
+        ws.recv()
+        time.sleep(0.08)
+        ws.send(json.dumps({'id': 363, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseReleased', 'x': lx, 'y': ly, 'button': 'left', 'clickCount': 1}}))
+        ws.recv()
+        
         time.sleep(0.3)
         ws.send(json.dumps({'id': 364, 'method': 'Input.dispatchKeyEvent', 'params': {'type': 'rawKeyDown', 'key': 'Enter', 'code': 'Enter', 'windowsVirtualKeyCode': 13}}))
         ws.recv()

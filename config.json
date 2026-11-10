@@ -1,6 +1,6 @@
 {
-    "batch_size": "5",
-    "delay": "1",
+    "batch_size": "3",
+    "delay": "2",
     "country": "PH (Philippines)",
     "mobile_ua": false,
     "clean_cookie": true,
