@@ -138,8 +138,34 @@ SHOPEE_DOMAINS = [
     "shopee.co.id"
 ]
 
-# Additional app info cookies from extension popup.js (v3.0 - 26.08.2026)
-ADDITIONAL_COOKIES = '; language=vi; SPC_RNBV=6081003; shopee_app_version=29531; shopee_rn_bundle_version=6081003; shopee_rn_version=1763129064'
+# Cấu hình chuẩn theo Extension Shopee Cookie Multi-Country (TIGER 10 v3.2 / Shopee App 36448)
+COUNTRY_INFO = {
+    'shopee.vn': {'lang': 'vi'},
+    'shopee.com.my': {'lang': 'en'},
+    'shopee.ph': {'lang': 'en'},
+    'shopee.tw': {'lang': 'zh-Hant'},
+    'shopee.co.th': {'lang': 'th'},
+    'shopee.sg': {'lang': 'en'},
+    'shopee.co.id': {'lang': 'id'}
+}
+TIGER10_APP_VERSION = '36448'
+TIGER10_RN_BUNDLE_VERSION = '6081003'
+TIGER10_RN_VERSION = '1763129064'
+
+def build_extension_suffix(domain="shopee.ph", has_language=False):
+    """Xây dựng chuỗi suffix app signature chuẩn theo OSCAL TIGER 10 (Shopee App v3.64.48 / 36448)"""
+    parts = []
+    norm_dom = (domain or "shopee.ph").strip().lstrip('.').lower()
+    if not has_language:
+        lang = COUNTRY_INFO.get(norm_dom, {}).get('lang', 'en' if 'ph' in norm_dom else 'vi')
+        parts.append(f"language={lang}")
+    parts.append(f"SPC_RNBV={TIGER10_RN_BUNDLE_VERSION}")
+    parts.append(f"shopee_app_version={TIGER10_APP_VERSION}")
+    parts.append(f"shopee_rn_bundle_version={TIGER10_RN_BUNDLE_VERSION}")
+    parts.append(f"shopee_rn_version={TIGER10_RN_VERSION}")
+    return "; " + "; ".join(parts)
+
+ADDITIONAL_COOKIES = build_extension_suffix("shopee.ph")
 
 # Mobile User-Agent Presets (9 devices from extension v3.0)
 import random
@@ -161,12 +187,17 @@ def random_ua_string():
 
 # Đường dẫn mặc định của Extension Shopee Cookie
 import hashlib
-EXTENSION_PATH = r'E:\reup SP mơi\Cookie Shopee 26.08.2026'
-if not os.path.exists(EXTENSION_PATH):
-    for _candidate in [r'E:\reup SP moi\Cookie Shopee 26.08.2026', r'E:\Extension shopee af']:
-        if os.path.exists(_candidate):
-            EXTENSION_PATH = _candidate
-            break
+EXTENSION_CANDIDATES = [
+    r'E:\cookie_shopee_Tiger10',
+    r'E:\reup SP mơi\Cookie Shopee 26.08.2026',
+    r'E:\reup SP moi\Cookie Shopee 26.08.2026',
+    r'E:\Extension shopee af'
+]
+EXTENSION_PATH = r'E:\cookie_shopee_Tiger10'
+for _candidate in EXTENSION_CANDIDATES:
+    if os.path.exists(_candidate):
+        EXTENSION_PATH = _candidate
+        break
 
 def get_chromium_extension_id(path_str):
     """Tính toán Extension ID chuẩn Chromium cho unpacked extension từ đường dẫn"""
@@ -520,16 +551,16 @@ def open_profile_with_extension_and_cdp(profile_path, port=52000, ext_path=EXTEN
     suppress_chrome_restore_popups(profile_path)
     ext_path = os.path.abspath(ext_path)
     
-    candidates = [
-        rf"C:\Users\{os.getlogin()}\.gemlogin\browser\140\Chrome-bin\chrome.exe",
-        rf"C:\Users\{os.getlogin()}\.gemlogin\browser\141\Chrome-bin\chrome.exe",
-    ]
-    
     chrome_exe = None
-    for c in candidates:
-        if os.path.exists(c):
-            chrome_exe = c
-            break
+    browser_base = rf"C:\Users\{os.getlogin()}\.gemlogin\browser"
+    if os.path.exists(browser_base):
+        ver_dirs = sorted([d for d in os.listdir(browser_base) if os.path.isdir(os.path.join(browser_base, d))],
+                          key=lambda x: int(x) if x.isdigit() else 0, reverse=True)
+        for vd in ver_dirs:
+            p = os.path.join(browser_base, vd, "Chrome-bin", "chrome.exe")
+            if os.path.exists(p):
+                chrome_exe = p
+                break
             
     if not chrome_exe:
         return None, None
@@ -709,6 +740,7 @@ def api_close_profile(profile_id):
 def get_websocket_url(debug_addr):
     """
     Queries /json to get the active target list and webSocketDebuggerUrl
+    Ưu tiên chọn tab đang mở Shopee.
     """
     url = f"http://{debug_addr}/json"
     for attempt in range(5):
@@ -716,6 +748,11 @@ def get_websocket_url(debug_addr):
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=3) as response:
                 targets = json.loads(response.read().decode('utf-8'))
+                # Ưu tiên target có URL chứa shopee
+                for target in targets:
+                    if target.get('type') == 'page' and 'shopee' in (target.get('url') or '').lower():
+                        return target.get('webSocketDebuggerUrl')
+                # Nếu không có shopee, chọn bất kỳ target type == 'page'
                 for target in targets:
                     if target.get('type') == 'page':
                         return target.get('webSocketDebuggerUrl')
@@ -1020,11 +1057,11 @@ def col_letter_to_index(col):
             return -1
     return idx - 1
 
-def fetch_accounts_from_google_sheet(sheet_url, user_col="E", profile_col="G"):
+def fetch_accounts_from_google_sheet(sheet_url, user_col="F", profile_col="E"):
     """
     Tải danh sách tài khoản từ Google Sheet theo cột cấu hình.
-    user_col: Cột chứa Username Shopee (mặc định E)
-    profile_col: Cột chứa Tên Profile Gemlogin (mặc định G)
+    user_col: Cột chứa Username Shopee (mặc định F cho sheet Regnik PH)
+    profile_col: Cột chứa Tên Profile Gemlogin (mặc định E cho sheet Regnik PH)
     Trả về (account_map {profile_name_upper: username}, message).
     """
     csv_url = parse_google_sheet_url_to_csv_url(sheet_url)
@@ -1034,8 +1071,8 @@ def fetch_accounts_from_google_sheet(sheet_url, user_col="E", profile_col="G"):
         
     u_idx = col_letter_to_index(user_col)
     p_idx = col_letter_to_index(profile_col)
-    if u_idx < 0: u_idx = 4  # Default E
-    if p_idx < 0: p_idx = 6  # Default G
+    if u_idx < 0: u_idx = 5  # Default F
+    if p_idx < 0: p_idx = 4  # Default E
     max_idx = max(u_idx, p_idx)
     
     try:
@@ -1052,8 +1089,14 @@ def fetch_accounts_from_google_sheet(sheet_url, user_col="E", profile_col="G"):
             if len(row) > max_idx:
                 username = row[u_idx].strip()
                 p_name = row[p_idx].strip().upper()
-                if username and p_name and username.lower() != 'ph' and not p_name.startswith('TÊN') and not username.lower().startswith('user'):
+                if username and p_name and username.lower() != 'ph' and not p_name.startswith('TÊN') and not username.lower().startswith('user') and not username.lower().startswith('id '):
                     account_map[p_name] = username
+            # Tự động nhận diện cấu trúc chuẩn Sheet Regnik (Cột E = PH3001, Cột F = Username Shopee)
+            if len(row) > 5:
+                col_e = row[4].strip().upper()
+                col_f = row[5].strip()
+                if col_e.startswith('PH') and col_f and not col_f.lower().startswith('id '):
+                    account_map[col_e] = col_f
                     
         return account_map, f"Đã nạp {len(account_map)} tài khoản từ Google Sheet (Cột {str(user_col).upper()}: User, Cột {str(profile_col).upper()}: Profile)."
     except Exception as e:
@@ -1144,73 +1187,90 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
     except Exception as e:
         return False, f"Lỗi đăng nhập bằng tài khoản: {e}"
 
-def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_password="Khoa01@c"):
+def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_password="Khoa01@c", profile_path=None):
     """
-    Kiểm tra xem Username và Password đã được lưu sẵn (autofill) trong trình duyệt hay chưa:
-    - Chờ đợi Chrome hoàn tất autofill vào ô input (lên đến 8-10 giây)
+    Kiểm tra xem Username và Password đã được lưu sẵn trong trình duyệt (autofill hoặc SQLite Login Data):
+    - Đọc trước thông tin tài khoản đã lưu từ Login Data của profile (nếu có profile_path)
+    - Kiểm tra ô input username & password trên trang Shopee
     - Đồng bộ giá trị vào React state bằng prototype setter và kích hoạt sự kiện input/change
     - Đảm bảo nút "LOG IN" được kích hoạt (không bị disabled)
     - Tự động bấm nút 'LOG IN' (DOM click + CDP Trusted Mouse Click + Enter)
     """
     try:
+        target_domain = (domain or "shopee.ph").strip().lstrip('.').lower()
+        if target_domain == "all" or not target_domain:
+            target_domain = "shopee.ph"
+
+        # 0. Đọc thông tin đã lưu trong Login Data nếu có
+        db_user, db_pass = None, None
+        if profile_path:
+            db_user, db_pass = extract_saved_credentials_from_profile_db(profile_path, domain=target_domain)
+
         ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=20)
         
-        # 1. Vòng lặp chờ Chrome autofill điền Username và Password vào trang
+        # 1. Vòng lặp phát hiện các ô input và autofill của Chrome
         detect_script = """
         (() => {
-            const userInput = document.querySelector('input[name="loginKey"]')
+            const allInputs = Array.from(document.querySelectorAll('input'));
+            let userInput = document.querySelector('input[name="loginKey"]')
                 || document.querySelector('input[autocomplete="username"]')
+                || allInputs.find(i => i.type !== 'password' && i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.offsetParent !== null)
                 || document.querySelector('input[type="text"]');
-            const passInput = document.querySelector('input[name="password"]')
+            let passInput = document.querySelector('input[name="password"]')
+                || document.querySelector('input[autocomplete="current-password"]')
+                || allInputs.find(i => i.type === 'password' && i.offsetParent !== null)
                 || document.querySelector('input[type="password"]');
 
-            if (!userInput || !passInput) {
-                return { ready: false };
+            if (!userInput && !passInput) {
+                return { ready: false, foundInputs: false };
             }
 
-            let uVal = (userInput.value || '').trim();
-            let pVal = (passInput.value || '').trim();
+            let uVal = userInput ? (userInput.value || '').trim() : '';
+            let pVal = passInput ? (passInput.value || '').trim() : '';
 
-            // Kích hoạt focus nếu Chrome chưa bung autofill
-            if (!uVal) {
+            // Kích hoạt focus nếu ô username còn trống để kích hoạt gợi ý/autofill của Chrome
+            if (!uVal && userInput) {
                 try { userInput.focus(); } catch(e) {}
                 uVal = (userInput.value || '').trim();
-                pVal = (passInput.value || '').trim();
+                pVal = passInput ? (passInput.value || '').trim() : '';
             }
 
             const isAutofill = Boolean(
                 uVal.length > 0 ||
-                (userInput.matches && (userInput.matches(':-webkit-autofill') || userInput.matches(':autofill'))) ||
-                (passInput.matches && (passInput.matches(':-webkit-autofill') || passInput.matches(':autofill')))
+                (userInput && userInput.matches && (userInput.matches(':-webkit-autofill') || userInput.matches(':autofill'))) ||
+                (passInput && passInput.matches && (passInput.matches(':-webkit-autofill') || passInput.matches(':autofill')))
             );
-
-            if (!uVal && !isAutofill) {
-                return { ready: false };
-            }
 
             return {
                 ready: true,
+                foundInputs: true,
                 uVal: uVal,
-                pVal: pVal
+                pVal: pVal,
+                isAutofill: isAutofill
             };
         })()
         """
         
         creds = {}
-        for attempt in range(8):
+        for attempt in range(6):
             ws.send(json.dumps({'id': 350 + attempt, 'method': 'Runtime.evaluate', 'params': {'expression': detect_script, 'returnByValue': True}}))
             raw = ws.recv()
             creds = json.loads(raw).get('result', {}).get('result', {}).get('value', {})
-            if creds and creds.get('ready') and creds.get('uVal'):
+            if creds and creds.get('uVal'):
                 break
-            time.sleep(1.0)
+            time.sleep(0.8)
             
-        if not creds or not creds.get('ready'):
+        u_val = (creds.get('uVal') or '').strip()
+        if not u_val and db_user:
+            u_val = db_user.strip()
+            
+        if not u_val:
             ws.close()
             return False, "Không có tài khoản lưu sẵn (Username/Password trống)", None
             
-        u_val = creds.get('uVal') or ''
-        p_val = creds.get('pVal') or default_password
+        p_val = (creds.get('pVal') or '').strip()
+        if not p_val:
+            p_val = db_pass or default_password or "Khoa01@c"
         
         # 2. Bơm giá trị vào React state và Click nút LOG IN
         submit_script = """
@@ -1219,25 +1279,37 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
                 if (!input || !value) return;
                 input.focus();
                 const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                if (setter) setter.call(input, value);
+                if (setter) {
+                    setter.call(input, value);
+                } else {
+                    input.value = value;
+                }
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
             }
 
-            const userInput = document.querySelector('input[name="loginKey"]')
+            const allInputs = Array.from(document.querySelectorAll('input'));
+            let userInput = document.querySelector('input[name="loginKey"]')
                 || document.querySelector('input[autocomplete="username"]')
+                || allInputs.find(i => i.type !== 'password' && i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.offsetParent !== null)
                 || document.querySelector('input[type="text"]');
-            const passInput = document.querySelector('input[name="password"]')
+            let passInput = document.querySelector('input[name="password"]')
+                || document.querySelector('input[autocomplete="current-password"]')
+                || allInputs.find(i => i.type === 'password' && i.offsetParent !== null)
                 || document.querySelector('input[type="password"]');
 
-            if (user && userInput) setReactInput(userInput, user);
-            if (pass && passInput) setReactInput(passInput, pass);
+            if (userInput) {
+                setReactInput(userInput, user);
+            }
+            if (passInput) {
+                setReactInput(passInput, pass);
+            }
 
             // Tìm nút LOG IN chính
             let targetBtn = Array.from(document.querySelectorAll('button')).find(b => {
                 const t = (b.innerText || b.textContent || '').trim().toLowerCase();
                 return t === 'log in' || t === 'login' || t === 'đăng nhập';
-            }) || document.querySelector('form button, button[type="submit"]');
+            }) || document.querySelector('button[type="submit"]') || document.querySelector('form button');
 
             if (targetBtn) {
                 try {
@@ -1422,7 +1494,7 @@ def extract_cookies_via_cdp(ws_url, target_domain=None, mobile_ua=False):
                         ws.recv()
                         
                         # Re-fetch cookies
-                        ws.send(json.dumps(cmd))
+                        ws.send(json.dumps({"id": 12, "method": "Network.getAllCookies"}))
                         res_refetch = json.loads(ws.recv())
                         cookies_list = res_refetch.get('result', {}).get('cookies', [])
                     ws.close()
@@ -1449,14 +1521,16 @@ def extract_cookies_via_cdp(ws_url, target_domain=None, mobile_ua=False):
         
     return cookies_list, user_agent
 
-# Danh sách các cookie thiết yếu của Shopee (chuẩn theo mẫu PH3001 upload thành công cho Tool MLS)
+# Danh sách các cookie thiết yếu của Shopee (chuẩn cho cả Tool MLS & EZAff)
 ESSENTIAL_COOKIE_KEYS = [
     'csrftoken',
     'SPC_F',
+    'SPC_CLIENTID',
     'REC_T_ID',
     'SPC_SI',
     'SPC_SEC_SI',
     'AC_CERT_D',
+    'SPC_EC',
     'SPC_ST',
     'SPC_U',
     'SPC_R_T_ID',
@@ -1464,6 +1538,232 @@ ESSENTIAL_COOKIE_KEYS = [
     'SPC_T_ID',
     'SPC_T_IV'
 ]
+
+def extract_profile_proxy(profile_info):
+    """
+    Trích xuất cấu hình Proxy từ đối tượng profile của Gemlogin API.
+    Trả về chuỗi proxy đã làm sạch (hoặc chuỗi rỗng nếu không dùng proxy).
+    """
+    if not isinstance(profile_info, dict):
+        return ""
+    for key in ('raw_proxy', 'proxy', 'http_proxy', 'proxy_string'):
+        val = profile_info.get(key)
+        if val and isinstance(val, str):
+            cleaned = val.strip().replace('|', ':').replace('\r', '').replace('\n', '')
+            if cleaned.lower() not in ('none', 'null', 'no', 'false', 'without_proxy'):
+                return cleaned
+    return ""
+
+def extract_saved_credentials_from_profile_db(profile_path, domain="shopee.ph"):
+    """
+    Đọc trực tiếp Username & Password Shopee đã lưu trong SQLite 'Default/Login Data' của profile Gemlogin.
+    Trả về tuple (username, password) hoặc (None, None).
+    """
+    if not profile_path or not os.path.exists(profile_path):
+        return None, None
+    target_domain = (domain or "shopee.ph").strip().lstrip('.').lower()
+    if target_domain == "all" or not target_domain:
+        target_domain = "shopee.ph"
+
+    login_db = os.path.join(profile_path, "Default", "Login Data")
+    if not os.path.exists(login_db):
+        return None, None
+
+    import tempfile
+    tmp_db = None
+    try:
+        fd, tmp_db = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        shutil.copy2(login_db, tmp_db)
+        conn = sqlite3.connect(tmp_db)
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT origin_url, username_value, password_value FROM logins WHERE username_value != '' ORDER BY date_last_used DESC"
+        ).fetchall()
+        conn.close()
+        
+        def parse_pw(p):
+            if isinstance(p, bytes):
+                try:
+                    s = p.decode('utf-8')
+                    if s and not s.startswith('v10'):
+                        return s.strip()
+                except Exception:
+                    pass
+            elif isinstance(p, str) and p:
+                return p.strip()
+            return ""
+
+        # Ưu tiên 1: Khớp chính xác target_domain (ví dụ shopee.ph)
+        for orig, usr, pw_raw in rows:
+            if target_domain in (orig or "").lower() and usr and usr.strip():
+                pw = parse_pw(pw_raw)
+                return usr.strip(), pw
+                
+        # Ưu tiên 2: Khớp bất kỳ domain shopee nào
+        for orig, usr, pw_raw in rows:
+            if "shopee." in (orig or "").lower() and usr and usr.strip():
+                pw = parse_pw(pw_raw)
+                return usr.strip(), pw
+    except Exception:
+        pass
+    finally:
+        if tmp_db and os.path.exists(tmp_db):
+            try:
+                os.remove(tmp_db)
+            except Exception:
+                pass
+    return None, None
+
+def extract_saved_username_from_profile_db(profile_path, domain="shopee.ph"):
+    """
+    Đọc trực tiếp Username Shopee đã lưu trong file SQLite 'Default/Login Data' của profile Gemlogin.
+    """
+    u, _ = extract_saved_credentials_from_profile_db(profile_path, domain=domain)
+    return u or ""
+
+def extract_cookie_from_extension(debug_addr, domain="shopee.ph"):
+    """
+    Trích xuất cookie đã bắt được trực tiếp từ Extension Shopee Cookie (Tiger 10):
+    1. Quét /json của cổng CDP để tìm target service_worker hoặc background_page của extension
+    2. Gọi Runtime.evaluate đọc 'rawHeaderCookie_<domain>' hoặc 'latestCookie' từ chrome.storage.local
+    3. Chuẩn hóa format Tiger 10 và trả về chuỗi cookie hoàn chỉnh (nếu có và hợp lệ)
+    """
+    if not debug_addr:
+        return None
+    try:
+        target_domain = (domain or "shopee.ph").strip().lstrip('.').lower()
+        if target_domain == "all" or not target_domain:
+            target_domain = "shopee.ph"
+            
+        url = f"http://{debug_addr}/json"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            targets = json.loads(resp.read().decode('utf-8'))
+            
+        ext_ws_url = None
+        for t in targets:
+            t_type = t.get('type')
+            t_url = t.get('url', '')
+            if (t_type in ('service_worker', 'background_page', 'other') and 'chrome-extension://' in t_url) or ('background.js' in t_url):
+                ext_ws_url = t.get('webSocketDebuggerUrl')
+                if ext_ws_url:
+                    break
+                    
+        if not ext_ws_url:
+            return None
+            
+        ws = websocket.create_connection(ext_ws_url, suppress_origin=True, timeout=5)
+        js_eval = f"""
+        new Promise(resolve => {{
+            chrome.storage.local.get(['latestCookie', 'rawHeaderCookie_{target_domain}'], res => {{
+                resolve(res['rawHeaderCookie_{target_domain}'] || res['latestCookie'] || '');
+            }});
+        }})
+        """
+        ws.send(json.dumps({'id': 888, 'method': 'Runtime.evaluate', 'params': {'expression': js_eval, 'awaitPromise': True, 'returnByValue': True}}))
+        raw = ws.recv()
+        ws.close()
+        
+        res = json.loads(raw)
+        cookie_val = res.get('result', {}).get('result', {}).get('value')
+        if cookie_val and isinstance(cookie_val, str) and any(k in cookie_val for k in ['SPC_EC=', 'SPC_ST=', 'SPC_U=']):
+            cookie_val = cookie_val.strip()
+            if "shopee_app_version=" not in cookie_val:
+                suffix = build_extension_suffix(target_domain, has_language=("language=" in cookie_val))
+                cookie_val = cookie_val.rstrip("; ") + suffix
+            return cookie_val
+    except Exception:
+        pass
+    return None
+
+def fetch_shopee_username(cookie_str, domain="shopee.ph", ws_url=None, profile_path=None):
+    """
+    Tự động lấy Username Shopee thật của tài khoản đang đăng nhập:
+    - Bước 0: Đọc trực tiếp từ cơ sở dữ liệu 'Default/Login Data' của profile Gemlogin (nhanh & chính xác 100%)
+    - Bước 1: Gọi trực tiếp API https://<domain>/api/v4/account/basic/get_account_info bằng Cookie
+    - Bước 2 (Dự phòng): Nếu có ws_url (CDP), gọi fetch trực tiếp bên trong tab trình duyệt
+    Trả về username (str) hoặc "" nếu không lấy được.
+    """
+    target_domain = (domain or "shopee.ph").strip().lstrip('.')
+    if target_domain == "ALL" or not target_domain:
+        target_domain = "shopee.ph"
+
+    # Bước 0: Đọc từ SQLite Login Data của profile
+    if profile_path:
+        db_user = extract_saved_username_from_profile_db(profile_path, domain=target_domain)
+        if db_user:
+            return db_user
+
+    # Bước 1: Gọi trực tiếp qua HTTP request với Cookie
+    if cookie_str:
+        try:
+            api_url = f"https://{target_domain}/api/v4/account/basic/get_account_info"
+            req = urllib.request.Request(
+                api_url,
+                headers={
+                    "Cookie": cookie_str,
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                    "Referer": f"https://{target_domain}/"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                if resp.status == 200:
+                    body = json.loads(resp.read().decode('utf-8', errors='ignore'))
+                    data = body.get('data') or {}
+                    uname = (data.get('username') or '').strip()
+                    if uname:
+                        return uname
+        except Exception:
+            pass
+
+    # Bước 2: Gọi qua trình duyệt đang mở bằng CDP Runtime.evaluate
+    if ws_url:
+        try:
+            ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=6)
+            js_code = """
+            (async function() {
+                try {
+                    const r = await fetch('https://%s/api/v4/account/basic/get_account_info', {
+                        method: 'GET',
+                        credentials: 'include'
+                    });
+                    const j = await r.json();
+                    return (j && j.data && j.data.username) ? String(j.data.username).trim() : '';
+                } catch(e) {
+                    return '';
+                }
+            })()
+            """ % target_domain
+            ws.send(json.dumps({
+                "id": 777,
+                "method": "Runtime.evaluate",
+                "params": {"expression": js_code, "returnByValue": True, "awaitPromise": True}
+            }))
+            res = json.loads(ws.recv())
+            ws.close()
+            uname = (res.get('result', {}).get('result', {}).get('value') or '').strip()
+            if uname:
+                return uname
+        except Exception:
+            pass
+
+    return ""
+
+def build_export_line(fmt, p_name, cookie_str, username="", password="", proxy=""):
+    """
+    Định dạng dòng xuất ra file TXT theo chế độ người dùng chọn:
+    - 'Profile|Cookie|User|Pass|Proxy (EZAff)' (5 cột chuẩn tích hợp Tool Tuấn Anh / EZAff)
+    - 'Tên|Cookie' (2 cột)
+    - 'Chỉ Cookie' (1 cột)
+    """
+    fmt_str = (fmt or "").strip()
+    if "Chỉ Cookie" in fmt_str or fmt_str.lower() == "cookie_only":
+        return f"{cookie_str}"
+    if "User|Pass" in fmt_str or "EZAff" in fmt_str or fmt_str.lower() == "ezaff":
+        return f"{p_name}|{cookie_str}|{username or ''}|{password or ''}|{proxy or ''}"
+    return f"{p_name}|{cookie_str}"
 
 def get_country_code(domain):
     domain = (domain or "").lower()
@@ -1542,10 +1842,11 @@ def format_cookies(cookies_list, target_domain=None, clean_mode=True):
                     cookie_parts.append(f"{k}={v}")
                     
         cookie_str = "; ".join(cookie_parts)
+        suffix = build_extension_suffix(domain, has_language=('language=' in cookie_str))
         if cookie_str:
-            cookie_str += ADDITIONAL_COOKIES
+            cookie_str += suffix
         else:
-            cookie_str = ADDITIONAL_COOKIES.lstrip('; ')
+            cookie_str = suffix.lstrip('; ')
             
         formatted_results[domain] = (cookie_str, is_logged_in)
         
@@ -1559,6 +1860,8 @@ def main():
     parser.add_argument("--country", type=str, default="ALL", help="Quốc gia lấy cookie (VN, PH, MY, ID, TH, TW hoặc ALL).")
     parser.add_argument("--mobile-ua", action="store_true", default=False, help="Bật giả lập Mobile UA (bypass anti-bot Shopee).")
     parser.add_argument("--full-cookies", action="store_true", default=False, help="Lấy toàn bộ cookie thô (mặc định là lấy tinh gọn chuẩn PH3001 cho Tool MLS).")
+    parser.add_argument("--format", type=str, default="ezaff", help="Định dạng TXT: 'ezaff' (profile|cookie|username|pass|proxy), 'name_cookie' (profile|cookie), 'cookie_only' (cookie).")
+    parser.add_argument("--password", type=str, default="Khoa01@c", help="Mật khẩu Shopee mặc định xuất kèm file (mặc định: Khoa01@c).")
     parser.add_argument("--output", type=str, default="shopee_cookies.txt", help="Tên file lưu kết quả (.txt hoặc .csv).")
     args = parser.parse_args()
 
@@ -1633,6 +1936,7 @@ def main():
                 opened_in_batch.append({
                     "id": p_id,
                     "name": p_name,
+                    "profile": p,
                     "addr": addr,
                     "already_running": is_already_running
                 })
@@ -1646,6 +1950,7 @@ def main():
         for item in opened_in_batch:
             p_id = item['id']
             p_name = item['name']
+            p_obj = item.get('profile', {})
             addr = item['addr']
             
             print(f"-> Đang kết nối tới [{p_id}] {p_name} ({addr})...")
@@ -1665,10 +1970,19 @@ def main():
                 continue
                 
             # Lưu các cookie tìm được vào file
+            proxy_str = extract_profile_proxy(p_obj)
+            wrote_any = False
             for domain, (cookie_str, logged_in) in formatted.items():
+                if not logged_in:
+                    print(f"   ⚠️ Bỏ qua [{domain}] của {p_name}: Chưa đăng nhập Shopee (thiếu SPC_ST/SPC_U)")
+                    continue
+                uname = ""
+                if args.format.lower() == "ezaff":
+                    uname = fetch_shopee_username(cookie_str, domain=domain, ws_url=ws_url)
                 if is_txt:
-                    txt_file.write(f"{p_name}|{cookie_str}\n")
-                    print(f"   ✅ Đã lấy cookie [{domain}] -> Dạng text ({p_name}|...)")
+                    out_line = build_export_line(args.format, p_name, cookie_str, username=uname, password=args.password, proxy=proxy_str)
+                    txt_file.write(f"{out_line}\n")
+                    print(f"   ✅ Đã lấy cookie [{domain}] -> {p_name} | User: {uname or '(trống)'} | Proxy: {proxy_str or 'Không'}")
                 else:
                     login_status = "Logged In" if logged_in else "Not Logged In"
                     csv_writer.writerow([
@@ -1681,12 +1995,14 @@ def main():
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     ])
                     print(f"   ✅ Đã lấy cookie [{domain}] [{login_status}]")
+                wrote_any = True
                 
-            success_count += 1
-            if is_txt:
-                txt_file.flush()
-            else:
-                csv_file.flush() # Đẩy dữ liệu xuống đĩa ngay lập tức
+            if wrote_any:
+                success_count += 1
+                if is_txt:
+                    txt_file.flush()
+                else:
+                    csv_file.flush() # Đẩy dữ liệu xuống đĩa ngay lập tức
             
         # 3. Đóng các profile được mở bởi script (không đóng các profile chạy sẵn)
         for item in opened_in_batch:

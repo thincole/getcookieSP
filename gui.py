@@ -397,11 +397,12 @@ class GemloginCookieGUI:
         
         # Output TXT Format Selection
         tk.Label(self.left_panel, text="Định dạng dòng xuất (TXT):", fg=TEXT_GRAY, bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
-        self.export_format_var = tk.StringVar(value="Tên|Cookie")
+        self.export_format_var = tk.StringVar(value="Profile|Cookie|User|Pass|Proxy (EZAff)")
         self.export_format_combo = ttk.Combobox(
             self.left_panel,
             textvariable=self.export_format_var,
             values=[
+                "Profile|Cookie|User|Pass|Proxy (EZAff)",
                 "Tên|Cookie",
                 "Chỉ Cookie"
             ],
@@ -1421,6 +1422,8 @@ class GemloginCookieGUI:
             p_info = p_lookup.get(p_id)
             p_name = p_info.get('name', f'Profile #{p_id}') if p_info else f'Profile #{p_id}'
             p_path = p_info.get('profile_path') if p_info else f"F:\\gemlogin\\profiles\\{p_id}"
+            if not p_path or not os.path.exists(p_path):
+                p_path = f"F:\\gemlogin\\profiles\\{p_id}"
             b_ver = p_info.get('browser_version', 140) if p_info else 140
             
             ok, msg = extractor.open_profile_with_extension(
@@ -1478,6 +1481,8 @@ class GemloginCookieGUI:
             p_info = p_lookup.get(p_id)
             p_name = p_info.get('name', f'Profile #{p_id}') if p_info else f'Profile #{p_id}'
             p_path = p_info.get('profile_path') if p_info else f"F:\\gemlogin\\profiles\\{p_id}"
+            if not p_path or not os.path.exists(p_path):
+                p_path = f"F:\\gemlogin\\profiles\\{p_id}"
             
             ok, msg = extractor.clear_shopee_site_data(p_path, domain=target_domain)
             if ok:
@@ -1622,6 +1627,8 @@ class GemloginCookieGUI:
             p_info = p_lookup.get(p_id)
             p_name = p_info.get('name', f'Profile #{p_id}') if p_info else f'Profile #{p_id}'
             p_path = p_info.get('profile_path') if p_info else f"F:\\gemlogin\\profiles\\{p_id}"
+            if not p_path or not os.path.exists(p_path):
+                p_path = f"F:\\gemlogin\\profiles\\{p_id}"
             
             self.ui_update_queue.put(('status', (p_id, "Đang mở...", STATUS_RUNNING)))
             self.log(f"🚀 [{p_id}] {p_name}: Đang mở trình duyệt...")
@@ -1674,20 +1681,27 @@ class GemloginCookieGUI:
                 is_logged_in = True
                 self.log(f"✨ [{p_id}] {p_name}: Profile đã có phiên đăng nhập Shopee hợp lệ từ trước!")
                 
-            # 1. BƯỚC 1 (ƯU TIÊN): Kiểm tra tài khoản lưu sẵn (autofill) trong trình duyệt
+            # 1. BƯỚC 1 (ƯU TIÊN): Kiểm tra tài khoản lưu sẵn (autofill / Login Data) trong trình duyệt
             if not is_logged_in:
                 self.log(f"🔐 [{p_id}] {p_name}: Kiểm tra tài khoản lưu sẵn trong trình duyệt...")
                 self.ui_update_queue.put(('status', (p_id, "Kiểm tra login lưu sẵn...", STATUS_RUNNING)))
                 
-                # Đảm bảo đang mở trang đăng nhập
+                # Kiểm tra xem trình duyệt đã mở trang login hay chưa, chỉ navigate nếu chưa ở trang login
                 try:
-                    ws_nav = websocket.create_connection(ws_url, suppress_origin=True, timeout=8)
-                    ws_nav.send(json.dumps({'id': 101, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/buyer/login?from=%2F&next=%2F"}}))
-                    ws_nav.recv()
-                    ws_nav.close()
+                    ws_chk = websocket.create_connection(ws_url, suppress_origin=True, timeout=5)
+                    ws_chk.send(json.dumps({'id': 100, 'method': 'Runtime.evaluate', 'params': {'expression': 'window.location.href', 'returnByValue': True}}))
+                    curr_url = json.loads(ws_chk.recv()).get('result', {}).get('result', {}).get('value', '')
+                    if 'buyer/login' not in curr_url:
+                        ws_chk.send(json.dumps({'id': 101, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/buyer/login?from=%2F&next=%2F"}}))
+                        ws_chk.recv()
+                        time.sleep(2.5)
+                    else:
+                        time.sleep(1.0)
+                    ws_chk.close()
                 except Exception:
-                    pass
-                res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain, default_password=default_pass)
+                    time.sleep(1.5)
+
+                res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain, default_password=default_pass, profile_path=p_path)
                 ok_saved = res_saved[0] if isinstance(res_saved, (tuple, list)) else bool(res_saved)
                 msg_saved = res_saved[1] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 1 else str(res_saved)
                 saved_user = res_saved[2] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 2 else ""
@@ -1695,8 +1709,8 @@ class GemloginCookieGUI:
                 self.log(f"👉 [{p_id}] {p_name}: {msg_saved}")
                 
                 if ok_saved:
-                    # Chờ kiểm tra kết quả đăng nhập (tối đa 10 giây)
-                    for _ in range(5):
+                    # Chờ kiểm tra kết quả đăng nhập (tối đa 14 giây)
+                    for _ in range(7):
                         if self.stop_requested:
                             break
                         time.sleep(2)
@@ -1805,31 +1819,51 @@ class GemloginCookieGUI:
                 is_logged_in = cookie_tuple[1] if cookie_tuple else False
             
             cookie_str = ""
-            if cookie_tuple:
+            # Ưu tiên 1: Lấy Cookie trực tiếp từ Extension Tiger 10 đã cài đặt
+            ext_cookie = extractor.extract_cookie_from_extension(debug_addr, domain=target_domain)
+            if ext_cookie and any(k in ext_cookie for k in ['SPC_EC=', 'SPC_ST=', 'SPC_U=']):
+                cookie_str = ext_cookie
+                is_logged_in = True
+                self.log(f"📦 [{p_id}] {p_name}: Đã lấy Cookie trực tiếp qua Extension Tiger 10!")
+            elif cookie_tuple:
                 cookie_str = cookie_tuple[0]
-                if is_logged_in:
-                    fmt = self.export_format_var.get() if hasattr(self, 'export_format_var') else "Tên|Cookie"
-                    if "Chỉ Cookie" in fmt:
-                        out_line = f"{cookie_str}"
+                if cookie_tuple[1]:
+                    is_logged_in = True
+            
+            if cookie_str and is_logged_in:
+                fmt = self.export_format_var.get() if hasattr(self, 'export_format_var') else "Profile|Cookie|User|Pass|Proxy (EZAff)"
+                proxy_str = extractor.extract_profile_proxy(p_info)
+                uname = saved_user or ""
+                if not uname:
+                    uname = extractor.extract_saved_username_from_profile_db(p_path, domain=target_domain)
+                if ("User|Pass" in fmt or "EZAff" in fmt) and not uname:
+                    uname = extractor.fetch_shopee_username(cookie_str, domain=target_domain, ws_url=ws_url, profile_path=p_path)
+                    if not uname:
+                        acc_map = getattr(self, 'account_map', {}) or {}
+                        uname = acc_map.get(p_name.strip().upper(), "")
+                out_line = extractor.build_export_line(
+                    fmt, p_name, cookie_str,
+                    username=uname,
+                    password=default_pass,
+                    proxy=proxy_str
+                )
+                    
+                with file_lock:
+                    success_count += 1
+                    if is_txt:
+                        txt_file.write(f"{out_line}\n")
+                        txt_file.flush()
                     else:
-                        out_line = f"{p_name}|{cookie_str}"
-                        
-                    with file_lock:
-                        success_count += 1
-                        if is_txt:
-                            txt_file.write(f"{out_line}\n")
-                            txt_file.flush()
-                        else:
-                            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            csv_writer.writerow([p_id, p_name, target_domain, "Đã đăng nhập", cookie_str, ua, now_str])
-                            csv_file.flush()
-                    status_text = "Đã lấy Cookie (Đã login)"
-                    status_color = STATUS_SUCCESS
-                    self.log(f"✅ [{p_id}] {p_name}: Đăng nhập & Trích xuất Cookie thành công!")
-                else:
-                    status_text = "Chưa login Shopee"
-                    status_color = STATUS_READY
-                    self.log(f"⚠️ [{p_id}] {p_name}: Chưa nhận phiên đăng nhập")
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        csv_writer.writerow([p_id, p_name, target_domain, "Đã đăng nhập", cookie_str, ua, now_str])
+                        csv_file.flush()
+                status_text = "Đã lấy Cookie (Đã login)"
+                status_color = STATUS_SUCCESS
+                self.log(f"✅ [{p_id}] {p_name}: Trích xuất thành công! (User: {uname or 'N/A'} | Pass: {default_pass} | Proxy: {proxy_str or 'Không'})")
+            elif cookie_str:
+                status_text = "Chưa login Shopee"
+                status_color = STATUS_READY
+                self.log(f"⚠️ [{p_id}] {p_name}: Chưa nhận phiên đăng nhập")
             else:
                 status_text = "Không có cookie"
                 status_color = STATUS_ERROR
@@ -1874,9 +1908,24 @@ class GemloginCookieGUI:
         self.log(f"=== Bắt đầu tiến trình trích xuất cho {len(selected_ids)} profile ===")
         country_label = self.country_var.get()
         ua_label = "📱 Mobile UA BẬT" if mobile_ua else "💻 Desktop UA"
-        clean_label = "✨ Lọc tinh gọn (Chuẩn MLS/PH3001): BẬT" if clean_cookie else "📦 Lấy đầy đủ cookie thô"
-        self.log(f"Quốc gia: {country_label} | {ua_label} | {clean_label} | Lô: {batch_size} | Trễ: {delay}s")
+        clean_label = "✨ Lọc tinh gọn (Chuẩn MLS/EZAff): BẬT" if clean_cookie else "📦 Lấy đầy đủ cookie thô"
+        fmt = self.export_format_var.get() if hasattr(self, 'export_format_var') else "Profile|Cookie|User|Pass|Proxy (EZAff)"
+        self.log(f"Quốc gia: {country_label} | Định dạng: {fmt} | Lô: {batch_size}")
         self.log(f"File lưu kết quả: {os.path.abspath(output_file)}")
+        
+        # Tự động nạp Google Sheet nếu dùng định dạng EZAff để dự phòng ánh xạ Username
+        sheet_url = self.sheet_url_entry.get().strip() if hasattr(self, 'sheet_url_entry') else ''
+        user_col = self.user_col_entry.get().strip() if hasattr(self, 'user_col_entry') else 'E'
+        profile_col = self.profile_col_entry.get().strip() if hasattr(self, 'profile_col_entry') else 'G'
+        if ("User|Pass" in fmt or "EZAff" in fmt) and sheet_url and not getattr(self, 'account_map', None):
+            accs, msg = extractor.fetch_accounts_from_google_sheet(sheet_url, user_col=user_col or 'E', profile_col=profile_col or 'G')
+            self.account_map = accs
+            self.log(f"📥 {msg}")
+            
+        default_pass = self.default_pass_entry.get().strip() if hasattr(self, 'default_pass_entry') else 'Khoa01@c'
+        if not default_pass:
+            default_pass = 'Khoa01@c'
+        p_lookup = {p['id']: p for p in self.profiles}
         
         # Quét lại các profile đang chạy sẵn trước khi bắt đầu thực hiện để tránh đóng
         self.running_ids_before = extractor.get_running_profiles()
@@ -1948,6 +1997,7 @@ class GemloginCookieGUI:
                 p_id = item['id']
                 p_name = item['name']
                 addr = item['addr']
+                p_info = p_lookup.get(p_id, {})
                 
                 self.log(f"-> Đang kết nối tới [{p_id}] {p_name} ({addr})...")
                 self.ui_update_queue.put(('status', (p_id, "Đang lấy cookie", STATUS_RUNNING)))
@@ -1971,16 +2021,31 @@ class GemloginCookieGUI:
                     continue
                     
                 # Save cookies to output file
+                proxy_str = extractor.extract_profile_proxy(p_info)
+                wrote_profile = False
                 for domain, (cookie_str, logged_in) in formatted.items():
-                    fmt = self.export_format_var.get() if hasattr(self, 'export_format_var') else "Tên|Cookie"
-                    if "Chỉ Cookie" in fmt:
-                        out_line = f"{cookie_str}"
-                    else:
-                        out_line = f"{p_name}|{cookie_str}"
+                    if not logged_in:
+                        self.log(f"   ⚠️ [{p_id}] {p_name}: Chưa đăng nhập Shopee ({domain}) — Bỏ qua không xuất")
+                        continue
+                        
+                    uname = ""
+                    if "User|Pass" in fmt or "EZAff" in fmt:
+                        p_path = p_info.get('profile_path') if isinstance(p_info, dict) else f"F:\\gemlogin\\profiles\\{p_id}"
+                        uname = extractor.fetch_shopee_username(cookie_str, domain=domain, ws_url=ws_url, profile_path=p_path)
+                        if not uname:
+                            acc_map = getattr(self, 'account_map', {}) or {}
+                            uname = acc_map.get(p_name.strip().upper(), "")
+                            
+                    out_line = extractor.build_export_line(
+                        fmt, p_name, cookie_str,
+                        username=uname,
+                        password=default_pass,
+                        proxy=proxy_str
+                    )
                         
                     if is_txt:
                         txt_file.write(f"{out_line}\n")
-                        self.log(f"   ✅ Đã trích xuất [{domain}] -> Dạng text ({out_line[:40]}...)")
+                        self.log(f"   ✅ Đã xuất [{domain}] -> {p_name} | User: {uname or '(trống)'} | Pass: {default_pass} | Proxy: {proxy_str or 'Không'}")
                     else:
                         login_status = "Logged In" if logged_in else "Not Logged In"
                         csv_writer.writerow([
@@ -1993,13 +2058,17 @@ class GemloginCookieGUI:
                             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         ])
                         self.log(f"   ✅ Đã trích xuất cookie [{domain}] [{login_status}] thành công.")
+                    wrote_profile = True
                     
-                success_count += 1
-                if is_txt:
-                    txt_file.flush()
+                if wrote_profile:
+                    success_count += 1
+                    if is_txt:
+                        txt_file.flush()
+                    else:
+                        csv_file.flush() # Ensure data is written
+                    self.ui_update_queue.put(('status', (p_id, "Thành công", STATUS_SUCCESS)))
                 else:
-                    csv_file.flush() # Ensure data is written
-                self.ui_update_queue.put(('status', (p_id, "Thành công", STATUS_SUCCESS)))
+                    self.ui_update_queue.put(('status', (p_id, "Chưa login", STATUS_WARNING)))
                 
             # 3. Auto-close profiles opened by this script (keep the ones that were running before)
             for item in opened_in_batch:
