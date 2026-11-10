@@ -64,22 +64,22 @@ exit /b
 echo [OK] Python: "%PY%"
 echo.
 
-:: Cai thu vien websocket-client neu thieu
-echo [*] Kiem tra thu vien websocket-client...
-"%PY%" -c "import websocket" >nul 2>&1
+:: Cai thu vien websocket-client va psutil neu thieu
+echo [*] Kiem tra thu vien websocket-client va psutil...
+"%PY%" -c "import websocket, psutil" >nul 2>&1
 if errorlevel 1 (
-    echo [*] Dang cai dat websocket-client...
-    "%PY%" -m pip install --user websocket-client
+    echo [*] Dang cai dat websocket-client va psutil...
+    "%PY%" -m pip install --user websocket-client psutil
     if errorlevel 1 (
         color 0c
-        echo [x] LOI: Khong the cai websocket-client!
-        echo [*] Thu chay: pip install websocket-client
+        echo [x] LOI: Khong the cai thu vien!
+        echo [*] Thu chay: pip install websocket-client psutil
         pause
         exit /b
     )
-    echo [OK] Da cai xong websocket-client.
+    echo [OK] Da cai xong thu vien.
 ) else (
-    echo [OK] websocket-client da san sang.
+    echo [OK] websocket-client va psutil da san sang.
 )
 echo.
 

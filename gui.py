@@ -988,14 +988,28 @@ class GemloginCookieGUI:
             except Exception:
                 pass
                 
-        # 2. Chạy lệnh git fetch và pull
+        # 2. Chạy lệnh git fetch và pull (hoặc tải trực tiếp từ GitHub Raw nếu không có .git)
         try:
-            subprocess.run("git fetch origin main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
-            pull_res = subprocess.run("git pull origin main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
-            
-            if pull_res.returncode != 0:
-                # Nếu có xung đột working directory, thử reset về origin/main
-                subprocess.run("git reset --hard origin/main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
+            updated_ok = False
+            git_dir = os.path.join(ROOT_DIR, ".git")
+            if os.path.exists(git_dir):
+                subprocess.run("git fetch origin main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
+                pull_res = subprocess.run("git pull origin main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
+                if pull_res.returncode != 0:
+                    reset_res = subprocess.run("git reset --hard origin/main", shell=True, capture_output=True, text=True, cwd=ROOT_DIR)
+                    updated_ok = (reset_res.returncode == 0)
+                else:
+                    updated_ok = True
+
+            if not updated_ok:
+                base_raw = "https://raw.githubusercontent.com/thincole/getcookieSP/main"
+                for fname in ("gui.py", "get_gemlogin_cookies.py", "version.txt", "run.bat", "update.bat"):
+                    url = f"{base_raw}/{fname}?t={int(time.time())}"
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache"})
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        content = resp.read()
+                        with open(os.path.join(ROOT_DIR, fname), "wb") as out_f:
+                            out_f.write(content)
                 
             # Khôi phục lại config.json người dùng đã cài đặt
             if cfg_backup and os.path.exists(CONFIG_PATH):
