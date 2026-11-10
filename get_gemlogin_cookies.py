@@ -1219,35 +1219,61 @@ def fetch_accounts_from_google_sheet(sheet_url, user_col="F", profile_col="E"):
             if len(row) > max_idx:
                 username = row[u_idx].strip()
                 p_name = row[p_idx].strip().upper()
-                if username and p_name and username.lower() != 'ph' and not p_name.startswith('TÊN') and not username.lower().startswith('user') and not username.lower().startswith('id '):
+                if (username and p_name and ' ' not in username
+                        and username.lower() != 'ph'
+                        and not p_name.startswith('TÊN')
+                        and not username.lower().startswith('user')
+                        and not username.lower().startswith('id ')):
                     account_map[p_name] = username
             # Tự động nhận diện cấu trúc chuẩn Sheet Regnik (Cột E = PH3001, Cột F = Username Shopee)
             if len(row) > 5:
                 col_e = row[4].strip().upper()
                 col_f = row[5].strip()
-                if col_e.startswith('PH') and col_f and not col_f.lower().startswith('id '):
+                if col_e.startswith('PH') and col_f and ' ' not in col_f and not col_f.lower().startswith('id '):
                     account_map[col_e] = col_f
                     
         return account_map, f"Đã nạp {len(account_map)} tài khoản từ Google Sheet (Cột {str(user_col).upper()}: User, Cột {str(profile_col).upper()}: Profile)."
     except Exception as e:
         return account_map, f"Lỗi tải Google Sheet: {e}"
 
+def lookup_username_for_profile(account_map, profile_name):
+    """
+    Tra cứu Username Shopee từ account_map theo tên profile Gemlogin.
+    Hỗ trợ khớp chính xác và khớp thông minh khi tên profile trên Gemlogin
+    được đánh số dạng PH4010..PH4099, PH40100 trong khi trên Google Sheet
+    kéo công thức thành PH410..PH499, PH500.
+    """
+    if not account_map or not profile_name:
+        return ""
+    k = str(profile_name).strip().upper()
+    if k in account_map:
+        return account_map[k]
+    m = re.match(r'^([A-Z]+)(\d)0(\d{1,3})$', k)
+    if m:
+        prefix, series_digit, tail = m.group(1), int(m.group(2)), int(m.group(3))
+        alt_num = series_digit * 100 + tail
+        alt_key = f"{prefix}{alt_num}"
+        if alt_key in account_map:
+            return account_map[alt_key]
+    return ""
+
 def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="Khoa01@c"):
     """
-    Tự động điền Username (Cột E) & Mật khẩu (mặc định Khoa01@c), rồi click nút LOG IN trên Shopee Mobile.
+    Tự động điền Username & Mật khẩu vào form đăng nhập Shopee, đợi React cập nhật state rồi click nút LOG IN.
     """
     try:
-        # Chờ trang tải hoàn tất form nhập liệu (tối đa 12 giây)
-        form_ok, form_msg = wait_for_login_page_loaded(ws_url, timeout=12)
+        # Chờ trang tải hoàn tất form nhập liệu (tối đa 15 giây)
+        form_ok, form_msg = wait_for_login_page_loaded(ws_url, timeout=15)
         if not form_ok:
             return False, f"Trang chưa sẵn sàng điền form ({form_msg})"
 
         ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=20)
         
-        # 1. Điền Username và Password vào Form
+        # 1. Điền Username và Password vào Form (kích hoạt đầy đủ sự kiện cho React)
         fill_form_js = """
         ((user, pass) => {
             function setInput(input, value) {
+                if (!input) return false;
                 input.focus();
                 const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                 if (setter) {
@@ -1257,22 +1283,22 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
                 }
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+                return true;
             }
             
-            const userInputs = Array.from(document.querySelectorAll('input')).filter(i => i.type !== 'password' && i.type !== 'hidden');
-            const passInputs = Array.from(document.querySelectorAll('input[type="password"]'));
+            const allInputs = Array.from(document.querySelectorAll('input'));
+            const userInput = document.querySelector('input[name="loginKey"]')
+                || document.querySelector('input[autocomplete="username"]')
+                || allInputs.find(i => i.type !== 'password' && i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.offsetParent !== null)
+                || document.querySelector('input[type="text"]');
+            const passInput = document.querySelector('input[name="password"]')
+                || document.querySelector('input[autocomplete="current-password"]')
+                || allInputs.find(i => i.type === 'password' && i.offsetParent !== null)
+                || document.querySelector('input[type="password"]');
             
-            let userFilled = false;
-            let passFilled = false;
-            
-            if (userInputs.length > 0) {
-                setInput(userInputs[0], user);
-                userFilled = true;
-            }
-            if (passInputs.length > 0) {
-                setInput(passInputs[0], pass);
-                passFilled = true;
-            }
+            const userFilled = setInput(userInput, user);
+            const passFilled = setInput(passInput, pass);
             
             return {
                 success: userFilled && passFilled,
@@ -1284,16 +1310,39 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
         
         ws.send(json.dumps({'id': 302, 'method': 'Runtime.evaluate', 'params': {'expression': fill_form_js, 'returnByValue': True}}))
         fill_res = json.loads(ws.recv()).get('result', {}).get('result', {}).get('value', {})
-        time.sleep(0.5)
         
         if not fill_res or not fill_res.get('userFilled'):
             ws.close()
             return False, "Không tìm thấy ô điền tên đăng nhập trên trang"
             
-        # 2. Tìm tọa độ nút LOG IN và gửi Trusted Mouse Click
+        # Đợi 0.6s để React xử lý state và mở khoá (enable) nút LOG IN
+        time.sleep(0.6)
+        
+        # 2. Kiểm tra lại giá trị trên ô input (tránh bị React render đè) và tìm tọa độ nút LOG IN
         get_login_btn_js = """
-        (() => {
-            const allElements = Array.from(document.querySelectorAll('button, div[role="button"], a, input[type="submit"]'));
+        ((user, pass) => {
+            function ensureInput(input, value) {
+                if (!input || !value) return;
+                if ((input.value || '').trim() !== value) {
+                    input.focus();
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    if (setter) setter.call(input, value);
+                    else input.value = value;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+            const allInputs = Array.from(document.querySelectorAll('input'));
+            const userInput = document.querySelector('input[name="loginKey"]')
+                || document.querySelector('input[autocomplete="username"]')
+                || allInputs.find(i => i.type !== 'password' && i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.offsetParent !== null);
+            const passInput = document.querySelector('input[name="password"]')
+                || document.querySelector('input[autocomplete="current-password"]')
+                || allInputs.find(i => i.type === 'password' && i.offsetParent !== null);
+            ensureInput(userInput, user);
+            ensureInput(passInput, pass);
+
+            const allElements = Array.from(document.querySelectorAll('button, div[role="button"], input[type="submit"]'));
             for (const el of allElements) {
                 if (el.closest('footer') || el.closest('.footer')) continue;
                 const t = (el.innerText || el.textContent || el.value || '').trim().toLowerCase();
@@ -1313,8 +1362,8 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
                 }
             }
             return {success: false};
-        })()
-        """
+        })(%s, %s)
+        """ % (json.dumps(username), json.dumps(password))
         ws.send(json.dumps({'id': 303, 'method': 'Runtime.evaluate', 'params': {'expression': get_login_btn_js, 'returnByValue': True}}))
         login_btn_coords = json.loads(ws.recv()).get('result', {}).get('result', {}).get('value', {})
         
@@ -1334,24 +1383,22 @@ def perform_auto_form_login(ws_url, domain="shopee.ph", username="", password="K
             ws.send(json.dumps({'id': 314, 'method': 'Input.dispatchKeyEvent', 'params': {'type': 'keyUp', 'key': 'Enter', 'code': 'Enter', 'windowsVirtualKeyCode': 13}}))
             ws.recv()
             
-            time.sleep(2)
             ws.close()
-            return True, "Đã điền tài khoản & gửi lệnh bấm nút LOG IN"
+            return True, f"Đã điền User '{username}' + Pass & ấn nút LOG IN"
         else:
             ws.close()
             return False, "Không tìm thấy nút LOG IN trên trang để bấm"
     except Exception as e:
         return False, f"Lỗi đăng nhập bằng tài khoản: {e}"
 
-def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_password="Khoa01@c", profile_path=None):
+def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_password="Khoa01@c", profile_path=None, fallback_username=None):
     """
-    Kiểm tra xem Username và Password đã được lưu sẵn trong trình duyệt (autofill hoặc SQLite Login Data):
+    Điền Username + Password và đăng nhập vào Shopee (ƯU TIÊN SỐ 1):
     - Đợi trang web và form đăng nhập tải hoàn tất trước khi thao tác
-    - Đọc trước thông tin tài khoản đã lưu từ Login Data của profile (nếu có profile_path)
-    - Kiểm tra ô input username & password trên trang Shopee
-    - Đồng bộ giá trị vào React state bằng prototype setter và kích hoạt sự kiện input/change
-    - Đảm bảo nút "LOG IN" được kích hoạt (không bị disabled)
-    - Tự động bấm nút 'LOG IN' (DOM click + CDP Trusted Mouse Click + Enter)
+    - Lấy Username từ: (1) Autofill trên form, (2) SQLite Login Data của profile, hoặc (3) fallback_username từ Google Sheet
+    - Lấy Password từ: (1) Autofill trên form, (2) SQLite Login Data, hoặc (3) default_password (Khoa01@c)
+    - Bơm giá trị vào React state bằng prototype setter và kích hoạt sự kiện input/change/blur
+    - Đợi 0.6s cho React mở khoá nút "LOG IN", sau đó bấm nút 'LOG IN' (DOM click + CDP Trusted Mouse Click + Enter)
     """
     try:
         target_domain = (domain or "shopee.ph").strip().lstrip('.').lower()
@@ -1397,48 +1444,46 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
                 pVal = passInput ? (passInput.value || '').trim() : '';
             }
 
-            const isAutofill = Boolean(
-                uVal.length > 0 ||
-                (userInput && userInput.matches && (userInput.matches(':-webkit-autofill') || userInput.matches(':autofill'))) ||
-                (passInput && passInput.matches && (passInput.matches(':-webkit-autofill') || passInput.matches(':autofill')))
-            );
-
             return {
                 ready: true,
                 foundInputs: true,
                 uVal: uVal,
-                pVal: pVal,
-                isAutofill: isAutofill
+                pVal: pVal
             };
         })()
         """
         
         creds = {}
-        for attempt in range(5):
+        for attempt in range(4):
             ws.send(json.dumps({'id': 350 + attempt, 'method': 'Runtime.evaluate', 'params': {'expression': detect_script, 'returnByValue': True}}))
             raw = ws.recv()
             creds = json.loads(raw).get('result', {}).get('result', {}).get('value', {})
             if creds and creds.get('uVal'):
                 break
-            time.sleep(0.5)
+            time.sleep(0.4)
             
         u_val = (creds.get('uVal') or '').strip()
+        source_label = "lưu sẵn trên trình duyệt"
         if not u_val and db_user:
             u_val = db_user.strip()
+            source_label = "Login Data trình duyệt"
+        if not u_val and fallback_username:
+            u_val = str(fallback_username).strip()
+            source_label = "Google Sheet"
             
         if not u_val:
             ws.close()
-            return False, "Không có tài khoản lưu sẵn (Username/Password trống)", None
+            return False, "Không tìm thấy Username (trong trình duyệt hoặc Google Sheet)", None
             
         p_val = (creds.get('pVal') or '').strip()
         if not p_val:
             p_val = db_pass or default_password or "Khoa01@c"
         
-        # 3. Bơm giá trị vào React state và Click nút LOG IN
-        submit_script = """
+        # 3. Giai đoạn 1: Điền giá trị User + Pass vào React state
+        fill_script = """
         ((user, pass) => {
             function setReactInput(input, value) {
-                if (!input || !value) return;
+                if (!input || !value) return false;
                 input.focus();
                 const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                 if (setter) {
@@ -1448,6 +1493,8 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
                 }
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+                return true;
             }
 
             const allInputs = Array.from(document.querySelectorAll('input'));
@@ -1461,23 +1508,53 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
                 || document.querySelector('input[type="password"]');
 
             if (!userInput && !passInput) {
-                return {
-                    success: false,
-                    btnFound: false,
-                    reason: 'Không tìm thấy các ô nhập trên giao diện'
-                };
+                return { success: false };
             }
 
-            if (userInput) {
-                setReactInput(userInput, user);
+            const uOk = setReactInput(userInput, user);
+            const pOk = setReactInput(passInput, pass);
+            return { success: uOk && pOk };
+        })(%s, %s)
+        """ % (json.dumps(u_val), json.dumps(p_val))
+        
+        ws.send(json.dumps({'id': 359, 'method': 'Runtime.evaluate', 'params': {'expression': fill_script, 'returnByValue': True}}))
+        ws.recv()
+        
+        # Đợi 0.6 giây cho React cập nhật state và enable nút LOG IN
+        time.sleep(0.6)
+        
+        # 4. Giai đoạn 2: Đảm bảo ô input vẫn giữ đúng giá trị & Click nút LOG IN
+        submit_script = """
+        ((user, pass) => {
+            function ensureReactInput(input, value) {
+                if (!input || !value) return;
+                if ((input.value || '').trim() !== value) {
+                    input.focus();
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    if (setter) setter.call(input, value);
+                    else input.value = value;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
             }
-            if (passInput) {
-                setReactInput(passInput, pass);
-            }
+
+            const allInputs = Array.from(document.querySelectorAll('input'));
+            let userInput = document.querySelector('input[name="loginKey"]')
+                || document.querySelector('input[autocomplete="username"]')
+                || allInputs.find(i => i.type !== 'password' && i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.offsetParent !== null)
+                || document.querySelector('input[type="text"]');
+            let passInput = document.querySelector('input[name="password"]')
+                || document.querySelector('input[autocomplete="current-password"]')
+                || allInputs.find(i => i.type === 'password' && i.offsetParent !== null)
+                || document.querySelector('input[type="password"]');
+
+            ensureReactInput(userInput, user);
+            ensureReactInput(passInput, pass);
 
             // Tìm nút LOG IN chính
-            let targetBtn = Array.from(document.querySelectorAll('button')).find(b => {
-                const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+            let targetBtn = Array.from(document.querySelectorAll('button, div[role="button"], input[type="submit"]')).find(b => {
+                if (b.closest('footer') || b.closest('.footer')) return false;
+                const t = (b.innerText || b.textContent || b.value || '').trim().toLowerCase();
                 return t === 'log in' || t === 'login' || t === 'đăng nhập';
             }) || document.querySelector('button[type="submit"]') || document.querySelector('form button');
 
@@ -1513,7 +1590,7 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
         
         if not submit_res or not submit_res.get('btnFound'):
             ws.close()
-            return False, f"Đã phát hiện tài khoản '{u_val}' nhưng không tìm thấy nút LOG IN trên trang", None
+            return False, f"Đã điền tài khoản '{u_val}' nhưng không tìm thấy nút LOG IN trên trang", u_val
 
         lx, ly = submit_res['x'], submit_res['y']
         ws.send(json.dumps({'id': 361, 'method': 'Input.dispatchMouseEvent', 'params': {'type': 'mouseMoved', 'x': lx, 'y': ly}}))
@@ -1531,9 +1608,9 @@ def perform_auto_saved_account_login(ws_url, domain="shopee.ph", default_passwor
         ws.recv()
         
         ws.close()
-        return True, f"Đã có sẵn tài khoản '{u_val}' & đã ấn nút LOG IN", u_val
+        return True, f"Đã điền User '{u_val}' + Pass ({source_label}) & ấn nút LOG IN", u_val
     except Exception as e:
-        return False, f"Lỗi khi kiểm tra tài khoản lưu sẵn: {e}", None
+        return False, f"Lỗi khi điền User + Pass: {e}", None
 
 def check_captcha_or_otp_presence(ws_url):
     """

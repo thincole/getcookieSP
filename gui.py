@@ -1711,15 +1711,18 @@ class GemloginCookieGUI:
         self.log(f"=== Bắt đầu Tự động Đăng nhập ĐA LUỒNG{retry_label} cho {len(selected_ids)} profile (Số luồng: {batch_size} | Độ trễ: {delay}s | Mạng: {net_mode_label}) ===")
         self.log(f"Thị trường: {target_domain} | File lưu: {os.path.abspath(output_file)}")
         
-        # Tự động nạp Google Sheet nếu có link nhưng chưa bấm nút Nạp
+        # Tự động nạp mới Google Sheet mỗi khi chạy để luôn cập nhật đầy đủ tài khoản mới nhất
         sheet_url = self.sheet_url_entry.get().strip() if hasattr(self, 'sheet_url_entry') else ''
-        user_col = self.user_col_entry.get().strip() if hasattr(self, 'user_col_entry') else 'E'
-        profile_col = self.profile_col_entry.get().strip() if hasattr(self, 'profile_col_entry') else 'G'
+        user_col = self.user_col_entry.get().strip() if hasattr(self, 'user_col_entry') else 'F'
+        profile_col = self.profile_col_entry.get().strip() if hasattr(self, 'profile_col_entry') else 'E'
         
-        if sheet_url and not getattr(self, 'account_map', None):
-            accs, msg = extractor.fetch_accounts_from_google_sheet(sheet_url, user_col=user_col or 'E', profile_col=profile_col or 'G')
-            self.account_map = accs
-            self.log(f"📥 {msg}")
+        if sheet_url:
+            accs, msg = extractor.fetch_accounts_from_google_sheet(sheet_url, user_col=user_col or 'F', profile_col=profile_col or 'E')
+            if accs:
+                self.account_map = accs
+                self.log(f"📥 {msg}")
+            elif not getattr(self, 'account_map', None):
+                self.log(f"⚠️ {msg}")
             
         default_pass = self.default_pass_entry.get().strip() if hasattr(self, 'default_pass_entry') else 'Khoa01@c'
         if not default_pass:
@@ -1801,6 +1804,9 @@ class GemloginCookieGUI:
                     
                 is_logged_in = False
                 cookie_tuple = None
+                saved_user = ""
+                acc_map = getattr(self, 'account_map', {}) or {}
+                sheet_username = extractor.lookup_username_for_profile(acc_map, p_name)
                 
                 # 0. Kiểm tra trước: Profile đã login Shopee sẵn chưa?
                 cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
@@ -1810,12 +1816,12 @@ class GemloginCookieGUI:
                     is_logged_in = True
                     self.log(f"✨ [{p_id}] {p_name}: Profile đã có phiên đăng nhập Shopee hợp lệ từ trước!")
                     
-                # 1. BƯỚC 1 (ƯU TIÊN): Kiểm tra tài khoản lưu sẵn (autofill / Login Data) trong trình duyệt
+                # 1. BƯỚC 1 (BẮT BUỘC ĐẦU TIÊN): Điền User + Pass vào để đăng nhập trước
                 if not is_logged_in:
-                    self.log(f"🔐 [{p_id}] {p_name}: Đợi trang đăng nhập tải & kiểm tra tài khoản lưu sẵn...")
-                    self.ui_update_queue.put(('status', (p_id, "Kiểm tra login lưu sẵn...", STATUS_RUNNING)))
+                    self.log(f"🔐 [{p_id}] {p_name}: Đợi trang đăng nhập tải & điền User + Pass để đăng nhập đầu tiên...")
+                    self.ui_update_queue.put(('status', (p_id, "Điền User + Pass...", STATUS_RUNNING)))
                     
-                    # Kiểm tra xem trình duyệt đã mở trang login hay chưa, chỉ navigate nếu chưa ở trang login
+                    # Đảm bảo đang ở trang buyer/login
                     try:
                         ws_chk = websocket.create_connection(ws_url, suppress_origin=True, timeout=5)
                         ws_chk.send(json.dumps({'id': 100, 'method': 'Runtime.evaluate', 'params': {'expression': 'window.location.href', 'returnByValue': True}}))
@@ -1827,7 +1833,13 @@ class GemloginCookieGUI:
                     except Exception:
                         pass
 
-                    res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain, default_password=default_pass, profile_path=p_path)
+                    res_saved = extractor.perform_auto_saved_account_login(
+                        ws_url,
+                        domain=target_domain,
+                        default_password=default_pass,
+                        profile_path=p_path,
+                        fallback_username=sheet_username
+                    )
                     ok_saved = res_saved[0] if isinstance(res_saved, (tuple, list)) else bool(res_saved)
                     msg_saved = res_saved[1] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 1 else str(res_saved)
                     saved_user = res_saved[2] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 2 else ""
@@ -1835,8 +1847,8 @@ class GemloginCookieGUI:
                     self.log(f"👉 [{p_id}] {p_name}: {msg_saved}")
                     
                     if ok_saved:
-                        # Chờ kiểm tra kết quả đăng nhập (tối đa 14 giây)
-                        for _ in range(7):
+                        # Chờ kiểm tra kết quả đăng nhập (tối đa 16 giây = 8 lần x 2s)
+                        for _ in range(8):
                             if self.stop_requested:
                                 break
                             time.sleep(2)
@@ -1846,7 +1858,7 @@ class GemloginCookieGUI:
                             if cookie_tuple and cookie_tuple[1]:
                                 is_logged_in = True
                                 user_display = f" '{saved_user}'" if saved_user else ""
-                                self.log(f"🎉 [{p_id}] {p_name}: Đăng nhập tài khoản lưu sẵn{user_display} thành công!")
+                                self.log(f"🎉 [{p_id}] {p_name}: Đăng nhập bằng User + Pass{user_display} thành công!")
                                 break
                                 
                         # Bắt Captcha/OTP nếu có
@@ -1866,21 +1878,26 @@ class GemloginCookieGUI:
                                     self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
                                     break
 
-                # 2. BƯỚC 2: Nếu chưa login được -> Đăng nhập bằng Username & Mật khẩu từ Google Sheet (nếu có)
-                if not is_logged_in:
-                    acc_map = getattr(self, 'account_map', {}) or {}
-                    p_key = p_name.strip().upper()
-                    username = acc_map.get(p_key)
-                    
-                    if username:
-                        self.log(f"🔑 [{p_id}] {p_name}: Đang đăng nhập tài khoản '{username}' (Mật khẩu: {default_pass})...")
-                        ok_form, msg_form = extractor.perform_auto_form_login(ws_url, domain=target_domain, username=username, password=default_pass)
-                        
-                        # Trích xuất kiểm tra sau khi login bằng tài khoản
-                        cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
-                        formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
-                        cookie_tuple = formatted.get(target_domain)
-                        is_logged_in = cookie_tuple[1] if cookie_tuple else False
+                # 1b. Nếu bước 1 dùng tài khoản lưu trong trình duyệt bị lỗi mà trên Google Sheet có Username khác -> Thử điền tiếp Username từ Google Sheet
+                if not is_logged_in and sheet_username and (not saved_user or saved_user.strip().lower() != sheet_username.strip().lower()):
+                    self.log(f"🔑 [{p_id}] {p_name}: Thử điền tiếp User từ Google Sheet '{sheet_username}' (Mật khẩu: {default_pass})...")
+                    self.ui_update_queue.put(('status', (p_id, f"Điền User Sheet {sheet_username}...", STATUS_RUNNING)))
+                    ok_form, msg_form = extractor.perform_auto_form_login(ws_url, domain=target_domain, username=sheet_username, password=default_pass)
+                    self.log(f"👉 [{p_id}] {p_name}: {msg_form}")
+                    if ok_form:
+                        saved_user = sheet_username
+                        # Chờ kiểm tra kết quả đăng nhập (tối đa 16 giây = 8 lần x 2s)
+                        for _ in range(8):
+                            if self.stop_requested:
+                                break
+                            time.sleep(2)
+                            cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                            formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                            cookie_tuple = formatted.get(target_domain)
+                            if cookie_tuple and cookie_tuple[1]:
+                                is_logged_in = True
+                                self.log(f"🎉 [{p_id}] {p_name}: Đăng nhập bằng User + Pass '{sheet_username}' thành công!")
+                                break
                         
                         # Nếu gặp Captcha / OTP -> Đứng yên chờ người dùng giải (tối đa 90 giây)
                         if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
@@ -1899,9 +1916,10 @@ class GemloginCookieGUI:
                                     self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
                                     break
                         
-                # 3. BƯỚC 3 (FALLBACK): Nếu vẫn chưa login được -> Bơm script tự động bấm "Tiếp tục dưới tên..." hoặc điền User/Password nếu phiên Facebook bị đăng xuất
+                # 2. BƯỚC 2 (FALLBACK): CHỈ KHI đăng nhập bằng User + Pass không thành công mới chuyển sang đăng nhập bằng Facebook
                 if not is_logged_in:
-                    self.log(f"🔄 [{p_id}] {p_name}: Bơm script tự động bấm 'Tiếp tục dưới tên...' hoặc đăng nhập lại Facebook...")
+                    self.log(f"🔄 [{p_id}] {p_name}: Đăng nhập bằng User + Pass không thành công -> Chuyển sang đăng nhập bằng Facebook...")
+                    self.ui_update_queue.put(('status', (p_id, "Đang login bằng FB...", STATUS_RUNNING)))
                     ok_fb, msg_fb = extractor.perform_auto_facebook_login(ws_url, domain=target_domain, debug_addr=debug_addr)
                     
                     # Trích xuất lại cookie sau khi login Facebook
@@ -1927,7 +1945,7 @@ class GemloginCookieGUI:
                                 self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
                                 break
                     
-                # 4. Kiểm tra bổ sung nếu Shopee cần thêm 2-3s để ghi session cookie hoặc chuyển hướng
+                # 3. Kiểm tra bổ sung nếu Shopee cần thêm 2-3s để ghi session cookie hoặc chuyển hướng
                 if not is_logged_in:
                     time.sleep(3)
                     try:
@@ -1964,8 +1982,7 @@ class GemloginCookieGUI:
                     if ("User|Pass" in fmt or "EZAff" in fmt) and not uname:
                         uname = extractor.fetch_shopee_username(cookie_str, domain=target_domain, ws_url=ws_url, profile_path=p_path)
                         if not uname:
-                            acc_map = getattr(self, 'account_map', {}) or {}
-                            uname = acc_map.get(p_name.strip().upper(), "")
+                            uname = sheet_username or extractor.lookup_username_for_profile(acc_map, p_name)
                     out_line = extractor.build_export_line(
                         fmt, p_name, cookie_str,
                         username=uname,
@@ -2030,12 +2047,13 @@ class GemloginCookieGUI:
         
         # Tự động nạp Google Sheet nếu dùng định dạng EZAff để dự phòng ánh xạ Username
         sheet_url = self.sheet_url_entry.get().strip() if hasattr(self, 'sheet_url_entry') else ''
-        user_col = self.user_col_entry.get().strip() if hasattr(self, 'user_col_entry') else 'E'
-        profile_col = self.profile_col_entry.get().strip() if hasattr(self, 'profile_col_entry') else 'G'
-        if ("User|Pass" in fmt or "EZAff" in fmt) and sheet_url and not getattr(self, 'account_map', None):
-            accs, msg = extractor.fetch_accounts_from_google_sheet(sheet_url, user_col=user_col or 'E', profile_col=profile_col or 'G')
-            self.account_map = accs
-            self.log(f"📥 {msg}")
+        user_col = self.user_col_entry.get().strip() if hasattr(self, 'user_col_entry') else 'F'
+        profile_col = self.profile_col_entry.get().strip() if hasattr(self, 'profile_col_entry') else 'E'
+        if ("User|Pass" in fmt or "EZAff" in fmt) and sheet_url:
+            accs, msg = extractor.fetch_accounts_from_google_sheet(sheet_url, user_col=user_col or 'F', profile_col=profile_col or 'E')
+            if accs:
+                self.account_map = accs
+                self.log(f"📥 {msg}")
             
         default_pass = self.default_pass_entry.get().strip() if hasattr(self, 'default_pass_entry') else 'Khoa01@c'
         if not default_pass:
@@ -2151,7 +2169,7 @@ class GemloginCookieGUI:
                         uname = extractor.fetch_shopee_username(cookie_str, domain=domain, ws_url=ws_url, profile_path=p_path)
                         if not uname:
                             acc_map = getattr(self, 'account_map', {}) or {}
-                            uname = acc_map.get(p_name.strip().upper(), "")
+                            uname = extractor.lookup_username_for_profile(acc_map, p_name)
                             
                     out_line = extractor.build_export_line(
                         fmt, p_name, cookie_str,
