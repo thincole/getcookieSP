@@ -157,6 +157,7 @@ class ProfileRow:
         
         # Extract status label
         self.status = "Sẵn sàng"
+        self.status_color = STATUS_READY
         self.status_lbl = tk.Label(
             self.frame, 
             text=self.status, 
@@ -182,6 +183,7 @@ class ProfileRow:
         
     def set_status(self, text, color):
         self.status = text
+        self.status_color = color
         self.status_lbl.config(text=text, fg=color)
         
     def set_sys_status(self, is_running):
@@ -725,6 +727,15 @@ class GemloginCookieGUI:
             borderwidth=0, padx=10, command=self.select_range_profiles
         )
         select_range_btn.pack(side=tk.LEFT, padx=(4, 2), ipady=2)
+
+        tk.Label(filter_row2, text="│", fg="#444444", bg=BG_DARK).pack(side=tk.LEFT, padx=6)
+        self.retry_error_btn = tk.Button(
+            filter_row2, text="🔄 Retry Lỗi", bg="#b71c1c", fg=TEXT_WHITE,
+            activebackground="#d32f2f", activeforeground=TEXT_WHITE,
+            font=("Arial", 9, "bold"), borderwidth=0, padx=12,
+            command=self.retry_failed_profiles
+        )
+        self.retry_error_btn.pack(side=tk.LEFT, padx=(2, 2), ipady=2)
         
         # Scrollable Canvas for profile list
         self.canvas_frame = tk.Frame(self.profile_list_frame, bg=BG_DARK)
@@ -1115,6 +1126,52 @@ class GemloginCookieGUI:
                     row.var.set(False)
                     
         self.update_stats()
+
+    def retry_failed_profiles(self):
+        """
+        Tự động lọc và tích chọn toàn bộ các profile bị lỗi / chưa lấy được cookie ở lần chạy trước,
+        bỏ chọn các profile đã thành công, và cho phép chạy lại (ghi nối tiếp vào file kết quả).
+        """
+        if self.is_extracting:
+            messagebox.showwarning("Cảnh báo", "Một tiến trình đang chạy. Vui lòng đợi hoàn tất hoặc dừng tiến trình trước khi Retry Lỗi.")
+            return
+
+        def _is_failed(row):
+            st = (row.status or "").strip().lower()
+            col = getattr(row, 'status_color', '')
+            if col in (STATUS_ERROR, STATUS_WARNING):
+                return True
+            if any(k in st for k in ('lỗi', 'chưa login', 'không có cookie', 'trống cookie')):
+                return True
+            return False
+
+        visible_rows = [row for row in self.profile_rows.values() if row.frame.winfo_ismapped()]
+        target_rows = visible_rows if any(_is_failed(r) for r in visible_rows) else list(self.profile_rows.values())
+
+        failed_ids = []
+        failed_names = []
+        for p_id, row in self.profile_rows.items():
+            if row in target_rows and _is_failed(row):
+                row.var.set(True)
+                failed_ids.append(p_id)
+                failed_names.append(row.name)
+            else:
+                row.var.set(False)
+
+        self.update_stats()
+
+        if not failed_ids:
+            messagebox.showinfo("Thông báo", "Hiện không có profile nào bị lỗi hoặc chưa lấy được cookie để Retry!")
+            return
+
+        preview_names = ", ".join(failed_names[:8]) + ("..." if len(failed_names) > 8 else "")
+        self.log(f"🔄 Đã lọc chọn {len(failed_ids)} profile bị lỗi để Retry: {preview_names}")
+
+        last_mode = getattr(self, 'last_run_mode', 'auto_fb_login')
+        if last_mode == 'extract_only':
+            self.start_extraction(append_mode=True)
+        else:
+            self.auto_login_fb_and_extract(append_mode=True)
         
     def update_stats(self):
         total = len(self.profiles)
@@ -1267,7 +1324,7 @@ class GemloginCookieGUI:
         else:
             self.start_extraction()
 
-    def start_extraction(self):
+    def start_extraction(self, append_mode=False):
         if self.is_extracting:
             return
             
@@ -1275,6 +1332,8 @@ class GemloginCookieGUI:
         if not selected_ids:
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 profile để lấy cookie.")
             return
+            
+        self.last_run_mode = 'extract_only'
             
         # Get and validate config values
         try:
@@ -1316,10 +1375,11 @@ class GemloginCookieGUI:
             self.refresh_btn.config(state=tk.DISABLED)
         self.search_entry.config(state=tk.DISABLED)
         
-        # Clear log screen for clean run
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        # Clear log screen for clean run (unless retrying)
+        if not append_mode:
+            self.log_text.config(state=tk.NORMAL)
+            self.log_text.delete(1.0, tk.END)
+            self.log_text.config(state=tk.DISABLED)
         
         # Update progress UI
         self.progress_lbl.config(text=f"Tiến độ: 0 / {len(selected_ids)}")
@@ -1342,7 +1402,7 @@ class GemloginCookieGUI:
         # Start background extraction thread
         t = threading.Thread(
             target=self.run_extraction_thread, 
-            args=(selected_ids, batch_size, delay, output_file, target_domain, mobile_ua, clean_cookie),
+            args=(selected_ids, batch_size, delay, output_file, target_domain, mobile_ua, clean_cookie, append_mode),
             daemon=True
         )
         t.start()
@@ -1547,7 +1607,7 @@ class GemloginCookieGUI:
         else:
             messagebox.showerror("Lỗi", msg)
 
-    def auto_login_fb_and_extract(self):
+    def auto_login_fb_and_extract(self, append_mode=False):
         """Tự động mở từng profile, bấm Login with Facebook, bấm Continue (hoặc Fallback tài khoản Google Sheet) và trích xuất Cookie sạch chuẩn MLS"""
         if self.is_extracting:
             messagebox.showwarning("Cảnh báo", "Một tiến trình khác đang chạy. Vui lòng đợi hoặc dừng lại trước.")
@@ -1558,6 +1618,7 @@ class GemloginCookieGUI:
             messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 profile để thực hiện.")
             return
             
+        self.last_run_mode = 'auto_fb_login'
         self.save_config()
             
         country_domain_map = {
@@ -1589,10 +1650,26 @@ class GemloginCookieGUI:
             delay = 1
             
         net_mode_confirm = "⚡ Dùng IP mạng chính (Không fake IP)" if no_proxy else "🌐 Dùng Proxy của Profile"
-        confirm = messagebox.askyesno(
-            "Xác nhận Tự động Đăng nhập Đa Luồng",
-            f"Bạn có chắc muốn tự động Đăng nhập (FB / Google Sheet) & Lấy Cookie cho {len(selected_ids)} profile đã chọn không?\n\nSố luồng chạy đồng thời: {batch_size}\nĐộ trễ giãn cách: {delay} giây\nChế độ mạng: {net_mode_confirm}\nDomain: {target_domain}\nFile lưu: {output_file}"
-        )
+        if append_mode:
+            confirm_title = "Xác nhận Retry Lỗi (Chạy lại Profile lỗi)"
+            confirm_msg = (
+                f"Đã tự động lọc và tích chọn {len(selected_ids)} profile bị lỗi / chưa lấy được cookie.\n\n"
+                f"Bạn có muốn chạy lại tự động Đăng nhập & Lấy Cookie cho {len(selected_ids)} profile này không?\n\n"
+                f"• Số luồng: {batch_size} | Độ trễ: {delay}s\n"
+                f"• Chế độ mạng: {net_mode_confirm}\n"
+                f"• File lưu: {output_file} (Ghi nối tiếp, giữ nguyên dữ liệu cũ)"
+            )
+        else:
+            confirm_title = "Xác nhận Tự động Đăng nhập Đa Luồng"
+            confirm_msg = (
+                f"Bạn có chắc muốn tự động Đăng nhập (FB / Google Sheet) & Lấy Cookie cho {len(selected_ids)} profile đã chọn không?\n\n"
+                f"Số luồng chạy đồng thời: {batch_size}\n"
+                f"Độ trễ giãn cách: {delay} giây\n"
+                f"Chế độ mạng: {net_mode_confirm}\n"
+                f"Domain: {target_domain}\n"
+                f"File lưu: {output_file}"
+            )
+        confirm = messagebox.askyesno(confirm_title, confirm_msg)
         if not confirm:
             return
             
@@ -1610,13 +1687,14 @@ class GemloginCookieGUI:
         
         threading.Thread(
             target=self.run_auto_fb_login_thread, 
-            args=(selected_ids, target_domain, output_file, clean_cookie, batch_size, delay, no_proxy), 
+            args=(selected_ids, target_domain, output_file, clean_cookie, batch_size, delay, no_proxy, append_mode), 
             daemon=True
         ).start()
 
-    def run_auto_fb_login_thread(self, selected_ids, target_domain, output_file, clean_cookie, batch_size=3, delay=1, no_proxy=True):
+    def run_auto_fb_login_thread(self, selected_ids, target_domain, output_file, clean_cookie, batch_size=3, delay=1, no_proxy=True, append_mode=False):
         net_mode_label = "⚡ Không fake IP (Dùng IP mạng chính)" if no_proxy else "🌐 Dùng Proxy của Profile"
-        self.log(f"=== Bắt đầu Tự động Đăng nhập ĐA LUỒNG cho {len(selected_ids)} profile (Số luồng: {batch_size} | Độ trễ: {delay}s | Mạng: {net_mode_label}) ===")
+        retry_label = " [RETRY LỖI - GHI NỐI TIẾP]" if append_mode else ""
+        self.log(f"=== Bắt đầu Tự động Đăng nhập ĐA LUỒNG{retry_label} cho {len(selected_ids)} profile (Số luồng: {batch_size} | Độ trễ: {delay}s | Mạng: {net_mode_label}) ===")
         self.log(f"Thị trường: {target_domain} | File lưu: {os.path.abspath(output_file)}")
         
         # Tự động nạp Google Sheet nếu có link nhưng chưa bấm nút Nạp
@@ -1636,14 +1714,17 @@ class GemloginCookieGUI:
         self.running_ids_before = extractor.get_running_profiles()
         is_txt = output_file.endswith('.txt')
         file_lock = threading.Lock()
+        file_mode = "a" if (append_mode and os.path.exists(output_file)) else "w"
         
         try:
             if is_txt:
-                txt_file = open(output_file, mode="w", encoding="utf-8")
+                txt_file = open(output_file, mode=file_mode, encoding="utf-8")
             else:
-                csv_file = open(output_file, mode="w", encoding="utf-8", newline="")
+                need_header = (file_mode == "w") or (not os.path.exists(output_file)) or (os.path.getsize(output_file) == 0)
+                csv_file = open(output_file, mode=file_mode, encoding="utf-8", newline="")
                 csv_writer = csv.writer(csv_file)
-                csv_writer.writerow(["Profile ID", "Profile Name", "Domain", "Status", "Cookie", "User Agent", "Exported At"])
+                if need_header:
+                    csv_writer.writerow(["Profile ID", "Profile Name", "Domain", "Status", "Cookie", "User Agent", "Exported At"])
         except Exception as e:
             self.log(f"❌ Không thể mở file kết quả để ghi: {e}")
             self.ui_update_queue.put(('finished', (0, 0)))
@@ -1891,8 +1972,8 @@ class GemloginCookieGUI:
                     status_color = STATUS_SUCCESS
                     self.log(f"✅ [{p_id}] {p_name}: Trích xuất thành công! (User: {uname or 'N/A'} | Pass: {default_pass} | Proxy: {proxy_str or 'Không'})")
                 elif cookie_str:
-                    status_text = "Chưa login Shopee"
-                    status_color = STATUS_READY
+                    status_text = "Lỗi / Chưa login"
+                    status_color = STATUS_ERROR
                     self.log(f"⚠️ [{p_id}] {p_name}: Chưa nhận phiên đăng nhập")
                 else:
                     status_text = "Không có cookie"
@@ -1923,8 +2004,9 @@ class GemloginCookieGUI:
             
         self.ui_update_queue.put(('finished', (success_count, total_selected)))
         
-    def run_extraction_thread(self, selected_ids, batch_size, delay, output_file, target_domain=None, mobile_ua=False, clean_cookie=True):
-        self.log(f"=== Bắt đầu tiến trình trích xuất cho {len(selected_ids)} profile ===")
+    def run_extraction_thread(self, selected_ids, batch_size, delay, output_file, target_domain=None, mobile_ua=False, clean_cookie=True, append_mode=False):
+        retry_label = " [RETRY LỖI - GHI NỐI TIẾP]" if append_mode else ""
+        self.log(f"=== Bắt đầu tiến trình trích xuất{retry_label} cho {len(selected_ids)} profile ===")
         country_label = self.country_var.get()
         ua_label = "📱 Mobile UA BẬT" if mobile_ua else "💻 Desktop UA"
         clean_label = "✨ Lọc tinh gọn (Chuẩn MLS/EZAff): BẬT" if clean_cookie else "📦 Lấy đầy đủ cookie thô"
@@ -1951,14 +2033,16 @@ class GemloginCookieGUI:
         
         # Prepare output file
         is_txt = output_file.endswith('.txt')
-        file_exists = os.path.exists(output_file)
+        file_mode = "a" if (append_mode and os.path.exists(output_file)) else "w"
         try:
             if is_txt:
-                txt_file = open(output_file, mode="w", encoding="utf-8")
+                txt_file = open(output_file, mode=file_mode, encoding="utf-8")
             else:
-                csv_file = open(output_file, mode="w", encoding="utf-8", newline="")
+                need_header = (file_mode == "w") or (not os.path.exists(output_file)) or (os.path.getsize(output_file) == 0)
+                csv_file = open(output_file, mode=file_mode, encoding="utf-8", newline="")
                 csv_writer = csv.writer(csv_file)
-                csv_writer.writerow(["Profile ID", "Profile Name", "Domain", "Status", "Cookie", "User Agent", "Exported At"])
+                if need_header:
+                    csv_writer.writerow(["Profile ID", "Profile Name", "Domain", "Status", "Cookie", "User Agent", "Exported At"])
         except Exception as e:
             self.log(f"❌ Không thể mở file kết quả để ghi: {e}")
             self.ui_update_queue.put(('finished', (0, 0)))
@@ -2030,13 +2114,13 @@ class GemloginCookieGUI:
                 cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=mobile_ua)
                 if not cookies_list:
                     self.log(f"⚠️ Không tìm thấy cookie Shopee nào trong [{p_id}] {p_name}")
-                    self.ui_update_queue.put(('status', (p_id, "Không có cookie", STATUS_READY)))
+                    self.ui_update_queue.put(('status', (p_id, "Không có cookie", STATUS_ERROR)))
                     continue
                     
                 formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
                 if not formatted:
                     self.log(f"⚠️ Không có cookie khớp quốc gia được chọn trong [{p_id}] {p_name}")
-                    self.ui_update_queue.put(('status', (p_id, "Trống cookie", STATUS_READY)))
+                    self.ui_update_queue.put(('status', (p_id, "Trống cookie", STATUS_ERROR)))
                     continue
                     
                 # Save cookies to output file
