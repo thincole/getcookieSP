@@ -619,14 +619,11 @@ class GemloginCookieGUI:
         self.progress_bar = ttk.Progressbar(self.stat_frame, mode="determinate")
         self.progress_bar.pack(fill=tk.X, pady=2)
         
-        # --- RIGHT COLUMN: Profile Selector & Logs ---
+        # --- RIGHT COLUMN: Profile Selector & Logs (Tỷ lệ 70% / 30%) ---
         self.right_column = tk.Frame(self.container, bg=BG_DARK)
         self.right_column.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        self.right_column.rowconfigure(0, weight=5)
-        self.right_column.rowconfigure(1, weight=1)
-        self.right_column.columnconfigure(0, weight=1)
         
-        # Profile list frame
+        # Profile list frame (Cao 70%)
         self.profile_list_frame = tk.LabelFrame(
             self.right_column, 
             text=" Danh sách Profile Gemlogin ", 
@@ -636,7 +633,7 @@ class GemloginCookieGUI:
             padx=10, 
             pady=10
         )
-        self.profile_list_frame.grid(row=0, column=0, sticky="nsew")
+        self.profile_list_frame.place(relx=0.0, rely=0.0, relwidth=1.0, relheight=0.69)
         
         # Row 1: Group filter & Search
         filter_row1 = tk.Frame(self.profile_list_frame, bg=BG_DARK)
@@ -762,7 +759,7 @@ class GemloginCookieGUI:
         self.scrollable_frame.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self.on_mousewheel))
         self.root.bind_all("<MouseWheel>", self.on_mousewheel)
         
-        # Log frame at the bottom of the right column
+        # Log frame at the bottom of the right column (Cao 30%)
         self.log_frame = tk.LabelFrame(
             self.right_column, 
             text=" Tiến trình thực thi / Log chi tiết ", 
@@ -770,9 +767,9 @@ class GemloginCookieGUI:
             bg=BG_DARK, 
             font=("Arial", 11, "bold"),
             padx=10, 
-            pady=10
+            pady=8
         )
-        self.log_frame.grid(row=1, column=0, sticky="nsew", pady=(15, 0))
+        self.log_frame.place(relx=0.0, rely=0.70, relwidth=1.0, relheight=0.30)
         
         self.log_text = tk.Text(
             self.log_frame, 
@@ -780,6 +777,7 @@ class GemloginCookieGUI:
             fg="#00ff00",  # Green code-like text
             insertbackground=TEXT_WHITE,
             font=("Courier New", 10),
+            height=5,
             borderwidth=0
         )
         self.log_scrollbar = ttk.Scrollbar(self.log_frame, orient="vertical", command=self.log_text.yview)
@@ -787,6 +785,9 @@ class GemloginCookieGUI:
         
         self.log_text.pack(side="left", fill="both", expand=True)
         self.log_scrollbar.pack(side="right", fill="y")
+        
+        self.log_frame.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self.on_log_mousewheel))
+        self.log_text.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self.on_log_mousewheel))
         
         # Make log text read-only
         self.log_text.config(state=tk.DISABLED)
@@ -796,6 +797,9 @@ class GemloginCookieGUI:
         
     def on_left_mousewheel(self, event):
         self.left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+    def on_log_mousewheel(self, event):
+        self.log_text.yview_scroll(int(-1*(event.delta/120)), "units")
         
     def browse_output(self):
         filename = filedialog.asksaveasfilename(
