@@ -570,6 +570,7 @@ def open_profile_with_extension_and_cdp(profile_path, port=52000, ext_path=EXTEN
         f"--user-data-dir={profile_path}",
         f"--load-extension={ext_path}",
         f"--remote-debugging-port={port}",
+        "--remote-allow-origins=*",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-session-crashed-bubble",
@@ -736,6 +737,67 @@ def api_close_profile(profile_id):
     except Exception as e:
         print(f"Error closing profile {profile_id}: {e}")
     return False
+
+def force_close_profile_browser(p_id, debug_addr=None, proc=None, profile_path=None):
+    """
+    Đóng sạch sẽ hoàn toàn 100% cửa sổ trình duyệt Chrome của profile Gemlogin:
+    1. Gửi lệnh CDP Browser.close tới cổng Debugging Browser (/json/version)
+    2. Nếu proc (Popen) còn sống, gọi proc.kill()
+    3. Gọi API Gemlogin api_close_profile(p_id)
+    4. Dùng psutil diệt triệt để bất kỳ tiến trình chrome.exe nào thuộc về profile này
+    """
+    # 1. CDP Browser.close qua webSocketDebuggerUrl
+    if debug_addr:
+        try:
+            url = f"http://{debug_addr}/json/version"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                v_data = json.loads(resp.read().decode('utf-8'))
+                b_ws = v_data.get('webSocketDebuggerUrl')
+                if b_ws:
+                    ws_b = websocket.create_connection(b_ws, suppress_origin=True, timeout=2)
+                    ws_b.send(json.dumps({'id': 999, 'method': 'Browser.close'}))
+                    try:
+                        ws_b.recv()
+                    except Exception:
+                        pass
+                    ws_b.close()
+        except Exception:
+            pass
+
+    # 2. Xử lý Popen object nếu có
+    if proc:
+        try:
+            proc.wait(timeout=1.0)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    # 3. Đồng bộ trạng thái với Gemlogin API
+    try:
+        api_close_profile(p_id)
+    except Exception:
+        pass
+
+    # 4. Sử dụng psutil đảm bảo không có bất kỳ chrome.exe nào của profile này còn chạy ngầm
+    try:
+        import psutil
+        needle = f"profiles\\{p_id}".lower()
+        needle_slash = f"profiles/{p_id}".lower()
+        p_path_norm = os.path.normpath(profile_path).lower() if profile_path else ""
+
+        for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if p.info['name'] and p.info['name'].lower() == 'chrome.exe':
+                    cmdline = ' '.join(p.info['cmdline'] or []).lower()
+                    if needle in cmdline or needle_slash in cmdline or (p_path_norm and p_path_norm in cmdline):
+                        p.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except Exception:
+        pass
 
 def get_websocket_url(debug_addr):
     """

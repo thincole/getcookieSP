@@ -1552,10 +1552,17 @@ class GemloginCookieGUI:
                 batch_size = 1
         except ValueError:
             batch_size = 3
+
+        try:
+            delay = int(self.delay_entry.get().strip())
+            if delay < 0:
+                delay = 1
+        except ValueError:
+            delay = 1
             
         confirm = messagebox.askyesno(
             "Xác nhận Tự động Đăng nhập Đa Luồng",
-            f"Bạn có chắc muốn tự động Đăng nhập (FB / Google Sheet) & Lấy Cookie cho {len(selected_ids)} profile đã chọn không?\n\nSố luồng chạy đồng thời: {batch_size}\nDomain: {target_domain}\nFile lưu: {output_file}"
+            f"Bạn có chắc muốn tự động Đăng nhập (FB / Google Sheet) & Lấy Cookie cho {len(selected_ids)} profile đã chọn không?\n\nSố luồng chạy đồng thời: {batch_size}\nĐộ trễ giãn cách: {delay} giây\nDomain: {target_domain}\nFile lưu: {output_file}"
         )
         if not confirm:
             return
@@ -1574,12 +1581,12 @@ class GemloginCookieGUI:
         
         threading.Thread(
             target=self.run_auto_fb_login_thread, 
-            args=(selected_ids, target_domain, output_file, clean_cookie, batch_size), 
+            args=(selected_ids, target_domain, output_file, clean_cookie, batch_size, delay), 
             daemon=True
         ).start()
 
-    def run_auto_fb_login_thread(self, selected_ids, target_domain, output_file, clean_cookie, batch_size=3):
-        self.log(f"=== Bắt đầu Tự động Đăng nhập ĐA LUỒNG cho {len(selected_ids)} profile (Số luồng: {batch_size}) ===")
+    def run_auto_fb_login_thread(self, selected_ids, target_domain, output_file, clean_cookie, batch_size=3, delay=1):
+        self.log(f"=== Bắt đầu Tự động Đăng nhập ĐA LUỒNG cho {len(selected_ids)} profile (Số luồng: {batch_size} | Độ trễ: {delay}s) ===")
         self.log(f"Thị trường: {target_domain} | File lưu: {os.path.abspath(output_file)}")
         
         # Tự động nạp Google Sheet nếu có link nhưng chưa bấm nút Nạp
@@ -1653,112 +1660,134 @@ class GemloginCookieGUI:
                     self.ui_update_queue.put(('progress', (processed_count, total_selected)))
                 return
                 
-            time.sleep(3)
-            ws_url = extractor.get_websocket_url(debug_addr)
-            if not ws_url:
-                self.log(f"❌ [{p_id}] {p_name}: Không tìm thấy cổng CDP")
-                if p_id not in self.running_ids_before:
-                    if proc:
-                        proc.terminate()
-                        try: proc.wait(timeout=2)
-                        except Exception: pass
-                    else:
-                        extractor.api_close_profile(p_id)
-                self.ui_update_queue.put(('status', (p_id, "Lỗi CDP", STATUS_ERROR)))
-                with file_lock:
-                    processed_count += 1
-                    self.ui_update_queue.put(('progress', (processed_count, total_selected)))
-                return
+            try:
+                time.sleep(2.5)
+                ws_url = extractor.get_websocket_url(debug_addr)
+                if not ws_url:
+                    self.log(f"❌ [{p_id}] {p_name}: Không tìm thấy cổng CDP")
+                    self.ui_update_queue.put(('status', (p_id, "Lỗi CDP", STATUS_ERROR)))
+                    with file_lock:
+                        processed_count += 1
+                        self.ui_update_queue.put(('progress', (processed_count, total_selected)))
+                    return
+                    
+                is_logged_in = False
+                cookie_tuple = None
                 
-            is_logged_in = False
-            cookie_tuple = None
-            
-            # 0. Kiểm tra trước: Profile đã login Shopee sẵn chưa?
-            cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
-            formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
-            cookie_tuple = formatted.get(target_domain)
-            if cookie_tuple and cookie_tuple[1]:
-                is_logged_in = True
-                self.log(f"✨ [{p_id}] {p_name}: Profile đã có phiên đăng nhập Shopee hợp lệ từ trước!")
-                
-            # 1. BƯỚC 1 (ƯU TIÊN): Kiểm tra tài khoản lưu sẵn (autofill / Login Data) trong trình duyệt
-            if not is_logged_in:
-                self.log(f"🔐 [{p_id}] {p_name}: Kiểm tra tài khoản lưu sẵn trong trình duyệt...")
-                self.ui_update_queue.put(('status', (p_id, "Kiểm tra login lưu sẵn...", STATUS_RUNNING)))
-                
-                # Kiểm tra xem trình duyệt đã mở trang login hay chưa, chỉ navigate nếu chưa ở trang login
-                try:
-                    ws_chk = websocket.create_connection(ws_url, suppress_origin=True, timeout=5)
-                    ws_chk.send(json.dumps({'id': 100, 'method': 'Runtime.evaluate', 'params': {'expression': 'window.location.href', 'returnByValue': True}}))
-                    curr_url = json.loads(ws_chk.recv()).get('result', {}).get('result', {}).get('value', '')
-                    if 'buyer/login' not in curr_url:
-                        ws_chk.send(json.dumps({'id': 101, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/buyer/login?from=%2F&next=%2F"}}))
-                        ws_chk.recv()
-                        time.sleep(2.5)
-                    else:
-                        time.sleep(1.0)
-                    ws_chk.close()
-                except Exception:
-                    time.sleep(1.5)
+                # 0. Kiểm tra trước: Profile đã login Shopee sẵn chưa?
+                cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                cookie_tuple = formatted.get(target_domain)
+                if cookie_tuple and cookie_tuple[1]:
+                    is_logged_in = True
+                    self.log(f"✨ [{p_id}] {p_name}: Profile đã có phiên đăng nhập Shopee hợp lệ từ trước!")
+                    
+                # 1. BƯỚC 1 (ƯU TIÊN): Kiểm tra tài khoản lưu sẵn (autofill / Login Data) trong trình duyệt
+                if not is_logged_in:
+                    self.log(f"🔐 [{p_id}] {p_name}: Kiểm tra tài khoản lưu sẵn trong trình duyệt...")
+                    self.ui_update_queue.put(('status', (p_id, "Kiểm tra login lưu sẵn...", STATUS_RUNNING)))
+                    
+                    # Kiểm tra xem trình duyệt đã mở trang login hay chưa, chỉ navigate nếu chưa ở trang login
+                    try:
+                        ws_chk = websocket.create_connection(ws_url, suppress_origin=True, timeout=5)
+                        ws_chk.send(json.dumps({'id': 100, 'method': 'Runtime.evaluate', 'params': {'expression': 'window.location.href', 'returnByValue': True}}))
+                        curr_url = json.loads(ws_chk.recv()).get('result', {}).get('result', {}).get('value', '')
+                        if 'buyer/login' not in curr_url:
+                            ws_chk.send(json.dumps({'id': 101, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/buyer/login?from=%2F&next=%2F"}}))
+                            ws_chk.recv()
+                            time.sleep(2.5)
+                        else:
+                            time.sleep(1.0)
+                        ws_chk.close()
+                    except Exception:
+                        time.sleep(1.5)
 
-                res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain, default_password=default_pass, profile_path=p_path)
-                ok_saved = res_saved[0] if isinstance(res_saved, (tuple, list)) else bool(res_saved)
-                msg_saved = res_saved[1] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 1 else str(res_saved)
-                saved_user = res_saved[2] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 2 else ""
-                
-                self.log(f"👉 [{p_id}] {p_name}: {msg_saved}")
-                
-                if ok_saved:
-                    # Chờ kiểm tra kết quả đăng nhập (tối đa 14 giây)
-                    for _ in range(7):
-                        if self.stop_requested:
-                            break
-                        time.sleep(2)
-                        cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
-                        formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
-                        cookie_tuple = formatted.get(target_domain)
-                        if cookie_tuple and cookie_tuple[1]:
-                            is_logged_in = True
-                            user_display = f" '{saved_user}'" if saved_user else ""
-                            self.log(f"🎉 [{p_id}] {p_name}: Đăng nhập tài khoản lưu sẵn{user_display} thành công!")
-                            break
-                            
-                    # Bắt Captcha/OTP nếu có
-                    if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
-                        self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP! Đang chờ bạn thao tác giải (tối đa 90 giây)...")
-                        self.ui_update_queue.put(('status', (p_id, "Chờ giải Captcha/OTP", STATUS_WARNING)))
-                        start_wait = time.time()
-                        while time.time() - start_wait < 90:
+                    res_saved = extractor.perform_auto_saved_account_login(ws_url, domain=target_domain, default_password=default_pass, profile_path=p_path)
+                    ok_saved = res_saved[0] if isinstance(res_saved, (tuple, list)) else bool(res_saved)
+                    msg_saved = res_saved[1] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 1 else str(res_saved)
+                    saved_user = res_saved[2] if isinstance(res_saved, (tuple, list)) and len(res_saved) > 2 else ""
+                    
+                    self.log(f"👉 [{p_id}] {p_name}: {msg_saved}")
+                    
+                    if ok_saved:
+                        # Chờ kiểm tra kết quả đăng nhập (tối đa 14 giây)
+                        for _ in range(7):
                             if self.stop_requested:
                                 break
-                            time.sleep(3)
+                            time.sleep(2)
                             cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
                             formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
                             cookie_tuple = formatted.get(target_domain)
                             if cookie_tuple and cookie_tuple[1]:
                                 is_logged_in = True
-                                self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
+                                user_display = f" '{saved_user}'" if saved_user else ""
+                                self.log(f"🎉 [{p_id}] {p_name}: Đăng nhập tài khoản lưu sẵn{user_display} thành công!")
                                 break
+                                
+                        # Bắt Captcha/OTP nếu có
+                        if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
+                            self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP! Đang chờ bạn thao tác giải (tối đa 90 giây)...")
+                            self.ui_update_queue.put(('status', (p_id, "Chờ giải Captcha/OTP", STATUS_WARNING)))
+                            start_wait = time.time()
+                            while time.time() - start_wait < 90:
+                                if self.stop_requested:
+                                    break
+                                time.sleep(3)
+                                cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                                formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                                cookie_tuple = formatted.get(target_domain)
+                                if cookie_tuple and cookie_tuple[1]:
+                                    is_logged_in = True
+                                    self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
+                                    break
 
-            # 2. BƯỚC 2: Nếu chưa login được -> Đăng nhập bằng Username & Mật khẩu từ Google Sheet (nếu có)
-            if not is_logged_in:
-                acc_map = getattr(self, 'account_map', {}) or {}
-                p_key = p_name.strip().upper()
-                username = acc_map.get(p_key)
-                
-                if username:
-                    self.log(f"🔑 [{p_id}] {p_name}: Đang đăng nhập tài khoản '{username}' (Mật khẩu: {default_pass})...")
-                    ok_form, msg_form = extractor.perform_auto_form_login(ws_url, domain=target_domain, username=username, password=default_pass)
+                # 2. BƯỚC 2: Nếu chưa login được -> Đăng nhập bằng Username & Mật khẩu từ Google Sheet (nếu có)
+                if not is_logged_in:
+                    acc_map = getattr(self, 'account_map', {}) or {}
+                    p_key = p_name.strip().upper()
+                    username = acc_map.get(p_key)
                     
-                    # Trích xuất kiểm tra sau khi login bằng tài khoản
+                    if username:
+                        self.log(f"🔑 [{p_id}] {p_name}: Đang đăng nhập tài khoản '{username}' (Mật khẩu: {default_pass})...")
+                        ok_form, msg_form = extractor.perform_auto_form_login(ws_url, domain=target_domain, username=username, password=default_pass)
+                        
+                        # Trích xuất kiểm tra sau khi login bằng tài khoản
+                        cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                        formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                        cookie_tuple = formatted.get(target_domain)
+                        is_logged_in = cookie_tuple[1] if cookie_tuple else False
+                        
+                        # Nếu gặp Captcha / OTP -> Đứng yên chờ người dùng giải (tối đa 90 giây)
+                        if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
+                            self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP! Đang đứng yên chờ bạn thao tác giải (tối đa 90 giây)...")
+                            self.ui_update_queue.put(('status', (p_id, "Chờ giải Captcha/OTP", STATUS_WARNING)))
+                            start_wait = time.time()
+                            while time.time() - start_wait < 90:
+                                if self.stop_requested:
+                                    break
+                                time.sleep(3)
+                                cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                                formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                                cookie_tuple = formatted.get(target_domain)
+                                if cookie_tuple and cookie_tuple[1]:
+                                    is_logged_in = True
+                                    self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
+                                    break
+                        
+                # 3. BƯỚC 3 (FALLBACK): Nếu vẫn chưa login được -> Bơm script tự động bấm "Tiếp tục dưới tên..." hoặc điền User/Password nếu phiên Facebook bị đăng xuất
+                if not is_logged_in:
+                    self.log(f"🔄 [{p_id}] {p_name}: Bơm script tự động bấm 'Tiếp tục dưới tên...' hoặc đăng nhập lại Facebook...")
+                    ok_fb, msg_fb = extractor.perform_auto_facebook_login(ws_url, domain=target_domain, debug_addr=debug_addr)
+                    
+                    # Trích xuất lại cookie sau khi login Facebook
                     cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
                     formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
                     cookie_tuple = formatted.get(target_domain)
                     is_logged_in = cookie_tuple[1] if cookie_tuple else False
                     
-                    # Nếu gặp Captcha / OTP -> Đứng yên chờ người dùng giải (tối đa 90 giây)
+                    # Nếu Facebook gặp Captcha / OTP -> Đứng yên chờ giải
                     if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
-                        self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP! Đang đứng yên chờ bạn thao tác giải (tối đa 90 giây)...")
+                        self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP từ Facebook/Shopee! Đang đứng yên chờ bạn giải...")
                         self.ui_update_queue.put(('status', (p_id, "Chờ giải Captcha/OTP", STATUS_WARNING)))
                         start_wait = time.time()
                         while time.time() - start_wait < 90:
@@ -1773,122 +1802,82 @@ class GemloginCookieGUI:
                                 self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
                                 break
                     
-            # 3. BƯỚC 3 (FALLBACK): Nếu vẫn chưa login được -> Bơm script tự động bấm "Tiếp tục dưới tên..." hoặc điền User/Password nếu phiên Facebook bị đăng xuất
-            if not is_logged_in:
-                self.log(f"🔄 [{p_id}] {p_name}: Bơm script tự động bấm 'Tiếp tục dưới tên...' hoặc đăng nhập lại Facebook...")
-                ok_fb, msg_fb = extractor.perform_auto_facebook_login(ws_url, domain=target_domain, debug_addr=debug_addr)
-                
-                # Trích xuất lại cookie sau khi login Facebook
-                cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
-                formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
-                cookie_tuple = formatted.get(target_domain)
-                is_logged_in = cookie_tuple[1] if cookie_tuple else False
-                
-                # Nếu Facebook gặp Captcha / OTP -> Đứng yên chờ giải
-                if not is_logged_in and extractor.check_captcha_or_otp_presence(ws_url):
-                    self.log(f"⚠️ [{p_id}] {p_name}: Phát hiện Captcha/OTP từ Facebook/Shopee! Đang đứng yên chờ bạn giải...")
-                    self.ui_update_queue.put(('status', (p_id, "Chờ giải Captcha/OTP", STATUS_WARNING)))
-                    start_wait = time.time()
-                    while time.time() - start_wait < 90:
-                        if self.stop_requested:
-                            break
-                        time.sleep(3)
-                        cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
-                        formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
-                        cookie_tuple = formatted.get(target_domain)
-                        if cookie_tuple and cookie_tuple[1]:
-                            is_logged_in = True
-                            self.log(f"🎉 [{p_id}] {p_name}: Đã phát hiện giải Captcha/OTP thành công!")
-                            break
-                
-            # 4. Kiểm tra bổ sung nếu Shopee cần thêm 2-3s để ghi session cookie hoặc chuyển hướng
-            if not is_logged_in:
-                time.sleep(3)
-                try:
-                    # Buộc nạp trang chủ Shopee nếu đang ở trang verify/traffic/error
-                    ws_chk = websocket.create_connection(ws_url, suppress_origin=True, timeout=5)
-                    ws_chk.send(json.dumps({'id': 401, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/"}}))
-                    ws_chk.recv()
-                    ws_chk.close()
+                # 4. Kiểm tra bổ sung nếu Shopee cần thêm 2-3s để ghi session cookie hoặc chuyển hướng
+                if not is_logged_in:
                     time.sleep(3)
-                except Exception:
-                    pass
-                cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
-                formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
-                cookie_tuple = formatted.get(target_domain)
-                is_logged_in = cookie_tuple[1] if cookie_tuple else False
-            
-            cookie_str = ""
-            # Ưu tiên 1: Lấy Cookie trực tiếp từ Extension Tiger 10 đã cài đặt
-            ext_cookie = extractor.extract_cookie_from_extension(debug_addr, domain=target_domain)
-            if ext_cookie and any(k in ext_cookie for k in ['SPC_EC=', 'SPC_ST=', 'SPC_U=']):
-                cookie_str = ext_cookie
-                is_logged_in = True
-                self.log(f"📦 [{p_id}] {p_name}: Đã lấy Cookie trực tiếp qua Extension Tiger 10!")
-            elif cookie_tuple:
-                cookie_str = cookie_tuple[0]
-                if cookie_tuple[1]:
-                    is_logged_in = True
-            
-            if cookie_str and is_logged_in:
-                fmt = self.export_format_var.get() if hasattr(self, 'export_format_var') else "Profile|Cookie|User|Pass|Proxy (EZAff)"
-                proxy_str = extractor.extract_profile_proxy(p_info)
-                uname = saved_user or ""
-                if not uname:
-                    uname = extractor.extract_saved_username_from_profile_db(p_path, domain=target_domain)
-                if ("User|Pass" in fmt or "EZAff" in fmt) and not uname:
-                    uname = extractor.fetch_shopee_username(cookie_str, domain=target_domain, ws_url=ws_url, profile_path=p_path)
-                    if not uname:
-                        acc_map = getattr(self, 'account_map', {}) or {}
-                        uname = acc_map.get(p_name.strip().upper(), "")
-                out_line = extractor.build_export_line(
-                    fmt, p_name, cookie_str,
-                    username=uname,
-                    password=default_pass,
-                    proxy=proxy_str
-                )
-                    
-                with file_lock:
-                    success_count += 1
-                    if is_txt:
-                        txt_file.write(f"{out_line}\n")
-                        txt_file.flush()
-                    else:
-                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        csv_writer.writerow([p_id, p_name, target_domain, "Đã đăng nhập", cookie_str, ua, now_str])
-                        csv_file.flush()
-                status_text = "Đã lấy Cookie (Đã login)"
-                status_color = STATUS_SUCCESS
-                self.log(f"✅ [{p_id}] {p_name}: Trích xuất thành công! (User: {uname or 'N/A'} | Pass: {default_pass} | Proxy: {proxy_str or 'Không'})")
-            elif cookie_str:
-                status_text = "Chưa login Shopee"
-                status_color = STATUS_READY
-                self.log(f"⚠️ [{p_id}] {p_name}: Chưa nhận phiên đăng nhập")
-            else:
-                status_text = "Không có cookie"
-                status_color = STATUS_ERROR
-                self.log(f"❌ [{p_id}] {p_name}: Không tìm thấy cookie")
-                
-            self.ui_update_queue.put(('status', (p_id, status_text, status_color)))
-            with file_lock:
-                processed_count += 1
-                self.ui_update_queue.put(('progress', (processed_count, total_selected)))
-                
-            # 4. Đóng profile sạch sẽ bằng CDP Browser.close để không bao giờ bị báo Restore pages
-            if p_id not in self.running_ids_before:
-                try:
-                    ws_c = websocket.create_connection(ws_url, suppress_origin=True, timeout=2)
-                    ws_c.send(json.dumps({'id': 999, 'method': 'Browser.close'}))
-                    ws_c.close()
-                except Exception:
-                    pass
-                if proc:
                     try:
-                        proc.wait(timeout=2)
+                        ws_chk = websocket.create_connection(ws_url, suppress_origin=True, timeout=5)
+                        ws_chk.send(json.dumps({'id': 401, 'method': 'Page.navigate', 'params': {'url': f"https://{target_domain}/"}}))
+                        ws_chk.recv()
+                        ws_chk.close()
+                        time.sleep(3)
                     except Exception:
-                        subprocess.run(f"taskkill /F /PID {proc.pid}", shell=True, capture_output=True)
+                        pass
+                    cookies_list, ua = extractor.extract_cookies_via_cdp(ws_url, target_domain=target_domain, mobile_ua=False)
+                    formatted = extractor.format_cookies(cookies_list, target_domain=target_domain, clean_mode=clean_cookie)
+                    cookie_tuple = formatted.get(target_domain)
+                    is_logged_in = cookie_tuple[1] if cookie_tuple else False
+                
+                cookie_str = ""
+                # Ưu tiên 1: Lấy Cookie trực tiếp từ Extension Tiger 10 đã cài đặt
+                ext_cookie = extractor.extract_cookie_from_extension(debug_addr, domain=target_domain)
+                if ext_cookie and any(k in ext_cookie for k in ['SPC_EC=', 'SPC_ST=', 'SPC_U=']):
+                    cookie_str = ext_cookie
+                    is_logged_in = True
+                    self.log(f"📦 [{p_id}] {p_name}: Đã lấy Cookie trực tiếp qua Extension Tiger 10!")
+                elif cookie_tuple:
+                    cookie_str = cookie_tuple[0]
+                    if cookie_tuple[1]:
+                        is_logged_in = True
+                
+                if cookie_str and is_logged_in:
+                    fmt = self.export_format_var.get() if hasattr(self, 'export_format_var') else "Profile|Cookie|User|Pass|Proxy (EZAff)"
+                    proxy_str = extractor.extract_profile_proxy(p_info)
+                    uname = saved_user or ""
+                    if not uname:
+                        uname = extractor.extract_saved_username_from_profile_db(p_path, domain=target_domain)
+                    if ("User|Pass" in fmt or "EZAff" in fmt) and not uname:
+                        uname = extractor.fetch_shopee_username(cookie_str, domain=target_domain, ws_url=ws_url, profile_path=p_path)
+                        if not uname:
+                            acc_map = getattr(self, 'account_map', {}) or {}
+                            uname = acc_map.get(p_name.strip().upper(), "")
+                    out_line = extractor.build_export_line(
+                        fmt, p_name, cookie_str,
+                        username=uname,
+                        password=default_pass,
+                        proxy=proxy_str
+                    )
+                        
+                    with file_lock:
+                        success_count += 1
+                        if is_txt:
+                            txt_file.write(f"{out_line}\n")
+                            txt_file.flush()
+                        else:
+                            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            csv_writer.writerow([p_id, p_name, target_domain, "Đã đăng nhập", cookie_str, ua, now_str])
+                            csv_file.flush()
+                    status_text = "Đã lấy Cookie (Đã login)"
+                    status_color = STATUS_SUCCESS
+                    self.log(f"✅ [{p_id}] {p_name}: Trích xuất thành công! (User: {uname or 'N/A'} | Pass: {default_pass} | Proxy: {proxy_str or 'Không'})")
+                elif cookie_str:
+                    status_text = "Chưa login Shopee"
+                    status_color = STATUS_READY
+                    self.log(f"⚠️ [{p_id}] {p_name}: Chưa nhận phiên đăng nhập")
                 else:
-                    extractor.api_close_profile(p_id)
+                    status_text = "Không có cookie"
+                    status_color = STATUS_ERROR
+                    self.log(f"❌ [{p_id}] {p_name}: Không tìm thấy cookie")
+                    
+                self.ui_update_queue.put(('status', (p_id, status_text, status_color)))
+                with file_lock:
+                    processed_count += 1
+                    self.ui_update_queue.put(('progress', (processed_count, total_selected)))
+            finally:
+                # Đóng profile sạch sẽ 100% bằng CDP Browser.close + psutil diệt tiến trình
+                extractor.force_close_profile_browser(p_id, debug_addr=debug_addr, proc=proc, profile_path=p_path)
+                if delay > 0:
+                    time.sleep(delay)
 
         # Chạy đa luồng theo batch_size
         with ThreadPoolExecutor(max_workers=batch_size) as executor:
@@ -2076,7 +2065,7 @@ class GemloginCookieGUI:
                 p_name = item['name']
                 if not item['already_running']:
                     self.log(f"<- Đang tự động đóng profile [{p_id}] {p_name}...")
-                    extractor.api_close_profile(p_id)
+                    extractor.force_close_profile_browser(p_id, debug_addr=item.get('addr'))
                     time.sleep(delay)
                     
             # Update progress bar
